@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
 Wave 1 – Early Prototype: SoSoValue news → LLM sentiment → dummy trade signal (+ Telegram test)
+Updated: Strictly uses live SOSOVALUE_API_KEY and Groq for blazing-fast inference.
 """
 
 import json
 import os
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from openai import OpenAI
+from groq import Groq
 from pydantic import BaseModel, ValidationError
 
 # ------------------------------------------------------------------
@@ -19,13 +20,12 @@ load_dotenv()
 
 SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
 SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL", "https://api.sosovalue.com")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # File paths
 CACHE_FILE = Path("news_cache.json")
-SAMPLE_FILE = Path("sample_news.json")
 
 # ------------------------------------------------------------------
 # Pydantic schema for LLM output
@@ -50,24 +50,21 @@ def save_cache(seen_ids: set):
         json.dump({"seen_ids": list(seen_ids)}, f)
 
 def fetch_news_from_api() -> list[dict]:
-    """Fetches latest news from SoSoValue API (real endpoint)."""
+    """Fetches latest news strictly from SoSoValue API (real endpoint)."""
+    if not SOSOVALUE_API_KEY:
+        raise ValueError("CRITICAL: SOSOVALUE_API_KEY is not set in the .env file.")
+
     headers = {"x-api-key": SOSOVALUE_API_KEY}
     url = f"{SOSOVALUE_BASE_URL}/v1/news/list"
     params = {"limit": 20}  # fetch enough to test dedup
+    
     with httpx.Client(timeout=15) as client:
         resp = client.get(url, headers=headers, params=params)
         resp.raise_for_status()
         data = resp.json()
+        
     # Adjust according to actual response structure – assuming {data: [...]}
     return data.get("data", data) if isinstance(data, dict) else data
-
-def fetch_news_static() -> list[dict]:
-    """Falls back to local sample file if API key not provided."""
-    if not SAMPLE_FILE.exists():
-        raise FileNotFoundError(f"Sample file {SAMPLE_FILE} not found.")
-    with open(SAMPLE_FILE, "r") as f:
-        data = json.load(f)
-    return data.get("data", data)
 
 def deduplicate(items: list[dict], seen_ids: set) -> list[dict]:
     """Filters out already‑processed news items and updates the cache."""
@@ -89,7 +86,7 @@ def build_prompt(news_batch: list[dict]) -> str:
     articles = []
     for n in news_batch[:10]:
         articles.append(
-            f"- {n['title']} (Asset: {n.get('currencyCode', 'N/A')}) | Summary: {n['summary']}"
+            f"- {n.get('title', 'No Title')} (Asset: {n.get('currencyCode', 'N/A')}) | Summary: {n.get('summary', 'No Summary')}"
         )
 
     prompt = f"""
@@ -107,20 +104,25 @@ Articles:
     return prompt
 
 def analyze_with_llm(prompt: str) -> list[dict]:
-    """Sends prompt to OpenAI and parses the structured response."""
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    """Sends prompt to Groq and parses the structured response."""
+    if not GROQ_API_KEY:
+        print("❌ GROQ_API_KEY is missing. Cannot perform sentiment analysis.")
+        return []
+
+    client = Groq(api_key=GROQ_API_KEY)
     try:
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",  # or "gpt-3.5-turbo"
+            model="llama-3.3-70b-versatile",  # High-performance Groq model
             messages=[
-                {"role": "system", "content": "You are a precise JSON responder."},
+                {"role": "system", "content": "You are a precise JSON responder. Always format your response as valid JSON."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.1,
-            response_format={"type": "json_object"}  # requires gpt-4o-mini or gpt-4-turbo
+            response_format={"type": "json_object"}  # Groq supports JSON mode on Llama 3
         )
         raw = completion.choices[0].message.content
         data = json.loads(raw)
+        
         # If the returned object is a dict with a key, try to get list
         if isinstance(data, dict) and "articles" in data:
             return data["articles"]
@@ -130,7 +132,7 @@ def analyze_with_llm(prompt: str) -> list[dict]:
         for v in data.values():
             if isinstance(v, list):
                 return v
-        raise ValueError("Unexpected JSON structure")
+        raise ValueError("Unexpected JSON structure returned from LLM")
     except Exception as e:
         print(f"❌ LLM error: {e}")
         return []
@@ -186,23 +188,19 @@ def send_telegram_test():
 # ------------------------------------------------------------------
 # Main prototype flow
 def main():
-    print("🚀 SentiTrade AI - Wave 1 Prototype")
-    print("====================================")
+    print("🚀 SentiTrade AI - Wave 1 Prototype (Powered by Groq)")
+    print("====================================================")
 
     # Step 1: Load cache
     seen_ids = load_cache()
 
-    # Step 2: Fetch news
+    # Step 2: Fetch real-time news
     try:
-        if SOSOVALUE_API_KEY:
-            print("📡 Fetching real‑time news from SoSoValue...")
-            news_items = fetch_news_from_api()
-        else:
-            print("📁 No API key – loading sample news from sample_news.json")
-            news_items = fetch_news_static()
+        print("📡 Fetching real‑time news from SoSoValue...")
+        news_items = fetch_news_from_api()
     except Exception as e:
-        print(f"❌ News fetch failed: {e}")
-        return
+        print(f"❌ Critical Error: {e}")
+        sys.exit(1)
 
     # Step 3: Deduplicate
     new_news = deduplicate(news_items, seen_ids)
@@ -212,7 +210,7 @@ def main():
 
     # Step 4: Build prompt and analyze with LLM
     prompt = build_prompt(new_news)
-    print("🧠 Sending to OpenAI...")
+    print("🧠 Sending to Groq...")
     analyses = analyze_with_llm(prompt)
 
     if not analyses:
