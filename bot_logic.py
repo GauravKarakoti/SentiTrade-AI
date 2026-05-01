@@ -155,7 +155,6 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     clean_asset = signal['asset'].replace("$", "")
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # Use callback_data to trigger the SideShift logic in main.py
     keyboard = {
         "inline_keyboard": [
             [

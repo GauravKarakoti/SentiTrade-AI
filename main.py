@@ -1,10 +1,15 @@
 import os
 import httpx
 import json
+import time
+import uuid
+import urllib.parse
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from eth_utils import keccak
+
 from db import init_db, get_db, User
 from bot_logic import (
     fetch_news_from_api, deduplicate, build_prompt, 
@@ -12,7 +17,11 @@ from bot_logic import (
     generate_chat_reply
 )
 
+# Environment Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+MINI_APP_URL = os.getenv("MINI_APP_URL")
+# Default to mainnet, but allow override for testing
+SODEX_SPOT_API = os.getenv("SODEX_SPOT_API", "https://mainnet-gw.sodex.dev/api/v1/spot")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,7 +53,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             asset = data.split("_")[1]
             await answer_callback_query(callback_id, "Requesting wallet connection...")
             
-            MINI_APP_URL = os.getenv("MINI_APP_URL")
             # STEP 1: Ask for connection first. Pass the asset so we remember what we are trading.
             web_app_url = f"{MINI_APP_URL}?intent=connect&asset={asset}"
             
@@ -61,7 +69,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             await edit_telegram_message(
                 chat_id, 
                 message_id, 
-                f"⚡ **Initiating {asset} Swap**\n\nPlease connect your wallet to designate a settlement address.",
+                f"⚡ **Initiating {asset} Trade on SoDEX**\n\nPlease connect your wallet to designate a settlement address.",
                 reply_markup=keyboard
             )
 
@@ -75,64 +83,71 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             web_app_payload = json.loads(update["message"]["web_app_data"]["data"])
             status = web_app_payload.get("status")
 
-            # --- STEP 2: WALLET CONNECTED -> GENERATE SIDESHIFT ORDER ---
+            # --- STEP 2: WALLET CONNECTED -> GENERATE SODEX ORDER ---
             if status == "connected":
                 user_address = web_app_payload.get("address")
                 asset = web_app_payload.get("asset", "Unknown")
                 
-                await send_direct_message(chat_id, f"⏳ **Executing Trade...**\nGenerating SideShift order for {asset} to settle at `{user_address[:6]}...{user_address[-4:]}`.")
+                await send_direct_message(chat_id, f"⏳ **Executing Trade...**\nPreparing SoDEX order for {asset}.")
                 
                 try:
-                    # Pass the dynamic address to the trade function
-                    trade_result = await execute_sideshift_trade(asset=asset, action="BUY", settle_address=user_address)
+                    order_data = await prepare_sodex_order(asset=asset, action="BUY", address=user_address)
+                    sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
+
+                    # Pass the payload hash, nonce, AND chainId to the Mini App for EIP-712 signing
+                    query_params = urllib.parse.urlencode({
+                        "intent": "sign_sodex",
+                        "hash": order_data["payload_hash"],
+                        "nonce": order_data["nonce"],
+                        "payload": order_data["compact_json"],
+                        "address": user_address,
+                        "sodexChainId": sodex_chain_id # ADD THIS LINE
+                    })
                     
-                    shift_id = trade_result.get("id", "Unknown")
-                    deposit_address = trade_result.get("depositAddress", "N/A")
-                    deposit_coin = trade_result.get("depositCoin", "").upper()
-                    
-                    MINI_APP_URL = os.getenv("MINI_APP_URL")
-                    wei_value = "10000000000000000" # Placeholder for 0.01 ETH
-                    
-                    # Generate the actual signing URL
-                    web_app_url = f"{MINI_APP_URL}?to={deposit_address}&token={deposit_coin}&chain=Ethereum&chainId=1&intent=swap&value={wei_value}&data=0x"
+                    web_app_url = f"{MINI_APP_URL}?{query_params}"
                     
                     keyboard = {
-                        "inline_keyboard": [
-                            [
-                                {
-                                    "text": f"🔐 Sign & Send {deposit_coin}", 
-                                    "web_app": {"url": web_app_url}
-                                }
-                            ]
-                        ]
+                        "inline_keyboard": [[{"text": f"🔐 Sign SoDEX Order", "web_app": {"url": web_app_url}}]]
                     }
 
-                    success_msg = (
-                        f"✅ **SideShift Order Created**\n"
-                        f"Asset: {asset}\n"
-                        f"Destination: `{user_address}`\n\n"
-                        f"⚠️ **Action Required:**\n"
-                        f"Click below to securely sign the transaction via your wallet."
-                    )
-                    
+                    success_msg = f"✅ **SoDEX Order Ready**\nAsset: {asset}\n\n⚠️ **Action Required:**\nClick below to securely sign the EIP-712 payload."
                     await send_direct_message(chat_id, success_msg, reply_markup=keyboard)
                     
-                except httpx.HTTPStatusError as e:
-                    error_msg = e.response.text if e.response else str(e)
-                    await send_direct_message(chat_id, f"❌ **Swap Failed**\nAsset: {asset}\nError: SideShift rejected the request.\nDetails: {error_msg}")
                 except Exception as e:
-                    await send_direct_message(chat_id, f"❌ **Execution Error**\nCould not reach SideShift: {str(e)}")
+                    await send_direct_message(chat_id, f"❌ **Execution Error:** {str(e)}")
 
-            # --- STEP 3: TRANSACTION SUBMITTED ---
-            elif status == "submitted":
-                tx_hash = web_app_payload.get("hash", "Unknown")
-                success_msg = (
-                    f"🎉 **Transaction Submitted Successfully!**\n\n"
-                    f"🔍 **Tx Hash:** `{tx_hash}`\n"
-                    f"[View on Explorer](https://etherscan.io/tx/{tx_hash})"
-                )
-                await send_direct_message(chat_id, success_msg)
+            # --- STEP 3: TRANSACTION SIGNED -> SUBMIT TO SODEX ---
+            elif status == "sodex_signed":
+                signature = web_app_payload.get("signature")
+                raw_payload = web_app_payload.get("payload")
+                nonce = web_app_payload.get("nonce")
+                user_address = web_app_payload.get("address")
                 
+                # Append 0x01 byte prefix for SoDEX typed signatures
+                typed_sig = "0x01" + signature[2:]
+                
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "X-API-Key": user_address,
+                    "X-API-Sign": typed_sig,
+                    "X-API-Nonce": str(nonce)
+                }
+                
+                # SoDEX HTTP request body contains ONLY the `params` object
+                params_only = json.loads(raw_payload)["params"]
+                
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(f"{SODEX_SPOT_API}/trade/orders/batch", json=params_only, headers=headers)
+                    resp_data = resp.json()
+                    
+                    if resp.status_code == 200 and resp_data.get("data", [{}])[0].get("code") == 0:
+                        order_id = resp_data["data"][0].get("orderID", "Unknown")
+                        await send_direct_message(chat_id, f"🎉 **Trade Executed!**\nSoDEX Order ID: `{order_id}`")
+                    else:
+                        error_detail = resp_data.get("data", [{}])[0].get("error", resp.text)
+                        await send_direct_message(chat_id, f"❌ **SoDEX Rejection:**\n`{error_detail}`")
+                        
         except json.JSONDecodeError:
             await send_direct_message(chat_id, "⚠️ Received malformed data from the signer app.")
             
@@ -149,23 +164,24 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             if not user:
                 db.add(User(chat_id=chat_id, is_active=True))
                 await db.commit()
-                await send_direct_message(chat_id, "Welcome to SentiTrade-AI! You will now receive high-confidence trade signals.")
+                await send_direct_message(chat_id, "Welcome to SentiTrade! You will now receive high-confidence trade signals.")
             else:
                 user.is_active = True
                 await db.commit()
-                await send_direct_message(chat_id, "Welcome back to SentiTrade-AI! Alerts are reactivated.")
+                await send_direct_message(chat_id, "Welcome back to SentiTrade! Alerts are reactivated.")
         elif text == "/stop":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
             if user:
                 user.is_active = False
                 await db.commit()
-                await send_direct_message(chat_id, "You have opted out of SentiTrade-AI alerts.")
+                await send_direct_message(chat_id, "You have opted out of SentiTrade alerts.")
         else:
             reply_text = generate_chat_reply(text)
             await send_direct_message(chat_id, reply_text)
 
     return {"status": "ok"}
+
 
 @app.post("/run-analysis")
 async def run_analysis(db: AsyncSession = Depends(get_db)):
@@ -195,53 +211,88 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
                 for chat_id in active_chat_ids:
                     await send_telegram_alert(chat_id, signal)
         
-        # Commit the new cached news IDs to Neon
+        # Commit the new cached news IDs
         await db.commit()
         return {"status": "success", "signals_generated": len(signals)}
 
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    
 
-# UPDATE: Pass settle_address as a parameter instead of env variable
-async def execute_sideshift_trade(asset: str, action: str = "BUY", amount_usd: float = 100.0, settle_address: str = None) -> dict:
-    sideshift_api_url = "https://sideshift.ai/api/v2/shifts/variable"
-    sideshift_secret = os.getenv("SIDESHIFT_SECRET", "")
-    affiliateID = os.getenv("AFFILIATE_ID", "")
+async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd: float = 100.0) -> dict:
+    """Prepares the SoDEX order payload and hash for EIP-712 signing."""
+    
+    clean_asset = asset.replace('$', '').upper()
+    # Assuming typical spot pairing format on SoDEX like vBTC_vUSDC
+    target_symbol_name = f"v{clean_asset}_vUSDC"
+    
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # 1. Fetch Dynamic Account ID[cite: 4]
+        state_resp = await client.get(f"{SODEX_SPOT_API}/accounts/{address}/state")
+        state_resp.raise_for_status()
+        state_data = state_resp.json()
+        
+        if state_data.get("code") != 0 or not state_data.get("data"):
+            raise ValueError(f"Wallet address {address[:6]} not recognized. Have you initialized your SoDEX account?")
+        
+        sodex_account_id = state_data["data"]["aid"]
 
-    if not settle_address:
-        raise ValueError("Settle address is required to execute a swap.")
+        # 2. Fetch Dynamic Symbol ID[cite: 4]
+        symbols_resp = await client.get(f"{SODEX_SPOT_API}/markets/symbols")
+        symbols_resp.raise_for_status()
+        symbols_data = symbols_resp.json()
+        
+        if symbols_data.get("code") != 0:
+            raise ValueError("Failed to fetch available markets from SoDEX.")
+            
+        symbol_id = None
+        for sym in symbols_data.get("data", []):
+            if sym.get("name") == target_symbol_name:
+                symbol_id = sym.get("id")
+                break
+                
+        if symbol_id is None:
+            raise ValueError(f"Asset '{target_symbol_name}' is currently not supported on SoDEX.")
 
-    clean_asset = asset.replace("$", "").lower()
-
+    # CRITICAL: Keys must exactly match the Go struct order per SoDEX API docs[cite: 1]
+    # Order: symbolID, clOrdID, side, type, timeInForce, [price, quantity, funds]
+    order_item = {
+        "symbolID": symbol_id,
+        "clOrdID": str(uuid.uuid4())[:36],
+        "side": 1 if action == "BUY" else 2,
+        "type": 2,        # 2 = MARKET[cite: 4]
+        "timeInForce": 3, # 3 = IOC[cite: 4]
+    }
+    
+    # DecimalString fields must be strings, not floats[cite: 1]
     if action == "BUY":
-        deposit_coin = "usdt"
-        deposit_network = "ethereum"
-        settle_coin = clean_asset
-        settle_network = "ethereum" 
-    else: 
-        deposit_coin = clean_asset
-        deposit_network = "ethereum"
-        settle_coin = "usdt"
-        settle_network = "ethereum"
+        order_item["funds"] = str(amount_usd)
+    else:
+        order_item["quantity"] = "1.0"
 
     payload = {
-        "depositCoin": deposit_coin,
-        "depositNetwork": deposit_network,
-        "settleCoin": settle_coin,
-        "settleNetwork": settle_network,
-        "settleAddress": settle_address,
-        "affiliateId": affiliateID
+        "type": "newOrder",
+        "params": {
+            "accountID": sodex_account_id,
+            "orders": [order_item]
+        }
+    }
+    
+    # Compact JSON serialization (no whitespace) required for signature generation[cite: 1]
+    compact_json = json.dumps(payload, separators=(',', ':'))
+    payload_hash = "0x" + keccak(text=compact_json).hex()
+    
+    # Nonce must be Unix millisecond timestamp[cite: 1]
+    nonce = int(time.time() * 1000)
+    
+    return {
+        "compact_json": compact_json,
+        "payload_hash": payload_hash,
+        "nonce": nonce
     }
 
-    headers = {"Content-Type": "application/json"}
-    if sideshift_secret:
-        headers["x-sideshift-secret"] = sideshift_secret
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(sideshift_api_url, json=payload, headers=headers)
-        response.raise_for_status()
-        return response.json()
+# --- Telegram Utility Functions ---
 
 async def send_direct_message(chat_id: int, text: str, reply_markup: dict = None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"

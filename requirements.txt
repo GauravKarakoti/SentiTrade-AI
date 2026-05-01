@@ -6,3 +6,4 @@ pydantic
 python-dotenv
 sqlalchemy
 asyncpg
+eth_utils
