@@ -9,7 +9,7 @@ from db import NewsCache
 
 # Load environment variables (handled by main.py usually, but safe here)
 SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
-SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL", "https://api.sosovalue.com")
+SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -30,7 +30,7 @@ async def fetch_news_from_api() -> list[dict]:
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(url, headers=headers, params=params)
         resp.raise_for_status()
-        data = resp.json()
+        data = resp.json().get("data")
         
     return data.get("list", []) if isinstance(data, dict) else []
 
