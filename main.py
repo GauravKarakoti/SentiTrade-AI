@@ -1,5 +1,6 @@
 import os
 import httpx
+import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +16,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize the Neon database tables on startup
     await init_db()
     yield
 
@@ -23,13 +23,12 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Receives incoming messages from Telegram."""
     try:
         update = await request.json()
     except Exception:
         return {"status": "error"}
 
-    # --- NEW: HANDLE BUTTON CLICKS (CALLBACK QUERIES) ---
+    # --- HANDLE BUTTON CLICKS (CALLBACK QUERIES) ---
     if "callback_query" in update:
         callback_query = update["callback_query"]
         callback_id = callback_query["id"]
@@ -38,60 +37,105 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         message_id = callback_query["message"]["message_id"]
 
         if data.startswith("reject_"):
-            # Deletes the signal from the chat
             await delete_telegram_message(chat_id, message_id)
-            # Acknowledge to stop the loading animation on the button
             await answer_callback_query(callback_id, "Signal deleted.")
             
         elif data.startswith("approve_"):
             asset = data.split("_")[1]
+            await answer_callback_query(callback_id, "Requesting wallet connection...")
             
-            # 1. Stop the loading animation on the button
-            await answer_callback_query(callback_id, f"Initiating {asset} swap via SideShift...")
+            MINI_APP_URL = os.getenv("MINI_APP_URL")
+            # STEP 1: Ask for connection first. Pass the asset so we remember what we are trading.
+            web_app_url = f"{MINI_APP_URL}?intent=connect&asset={asset}"
             
-            # 2. Update the message text to show processing state
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🔗 Connect Wallet to Set Destination", 
+                            "web_app": {"url": web_app_url}
+                        }
+                    ]
+                ]
+            }
             await edit_telegram_message(
                 chat_id, 
                 message_id, 
-                f"⏳ **Executing Trade...**\nGenerating direct SideShift order for {asset}."
+                f"⚡ **Initiating {asset} Swap**\n\nPlease connect your wallet to designate a settlement address.",
+                reply_markup=keyboard
             )
 
-            try:
-                # 3. Call the direct SideShift Logic
-                trade_result = await execute_sideshift_trade(asset=asset, action="BUY")
-                
-                # 4. Confirm Success and provide deposit instructions
-                shift_id = trade_result.get("id", "Unknown")
-                deposit_address = trade_result.get("depositAddress", "N/A")
-                deposit_coin = trade_result.get("depositCoin", "").upper()
-                
-                success_msg = (
-                    f"✅ **SideShift Order Created**\n"
-                    f"Asset: {asset}\n"
-                    f"Order ID: `{shift_id}`\n\n"
-                    f"⚠️ **Action Required:**\n"
-                    f"Send your {deposit_coin} to the following address to complete the swap:\n"
-                    f"`{deposit_address}`"
-                )
-                
-                await edit_telegram_message(chat_id, message_id, success_msg)
-                
-            except httpx.HTTPStatusError as e:
-                # 5. Handle HTTP Failures from SideShift
-                error_msg = e.response.text if e.response else str(e)
-                await edit_telegram_message(
-                    chat_id, 
-                    message_id, 
-                    f"❌ **Swap Failed**\nAsset: {asset}\nError: SideShift rejected the request.\nDetails: {error_msg}"
-                )
-            except Exception as e:
-                # 6. Handle General Failures (timeouts, connection issues)
-                await edit_telegram_message(
-                    chat_id, 
-                    message_id, 
-                    f"❌ **Execution Error**\nAsset: {asset}\nCould not reach SideShift: {str(e)}"
-                )
+        return {"status": "ok"}
 
+    # --- HANDLE WEB APP DATA RETURNED FROM MINI APP ---
+    if "message" in update and "web_app_data" in update["message"]:
+        chat_id = update["message"]["chat"]["id"]
+        
+        try:
+            web_app_payload = json.loads(update["message"]["web_app_data"]["data"])
+            status = web_app_payload.get("status")
+
+            # --- STEP 2: WALLET CONNECTED -> GENERATE SIDESHIFT ORDER ---
+            if status == "connected":
+                user_address = web_app_payload.get("address")
+                asset = web_app_payload.get("asset", "Unknown")
+                
+                await send_direct_message(chat_id, f"⏳ **Executing Trade...**\nGenerating SideShift order for {asset} to settle at `{user_address[:6]}...{user_address[-4:]}`.")
+                
+                try:
+                    # Pass the dynamic address to the trade function
+                    trade_result = await execute_sideshift_trade(asset=asset, action="BUY", settle_address=user_address)
+                    
+                    shift_id = trade_result.get("id", "Unknown")
+                    deposit_address = trade_result.get("depositAddress", "N/A")
+                    deposit_coin = trade_result.get("depositCoin", "").upper()
+                    
+                    MINI_APP_URL = os.getenv("MINI_APP_URL")
+                    wei_value = "10000000000000000" # Placeholder for 0.01 ETH
+                    
+                    # Generate the actual signing URL
+                    web_app_url = f"{MINI_APP_URL}?to={deposit_address}&token={deposit_coin}&chain=Ethereum&chainId=1&intent=swap&value={wei_value}&data=0x"
+                    
+                    keyboard = {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": f"🔐 Sign & Send {deposit_coin}", 
+                                    "web_app": {"url": web_app_url}
+                                }
+                            ]
+                        ]
+                    }
+
+                    success_msg = (
+                        f"✅ **SideShift Order Created**\n"
+                        f"Asset: {asset}\n"
+                        f"Destination: `{user_address}`\n\n"
+                        f"⚠️ **Action Required:**\n"
+                        f"Click below to securely sign the transaction via your wallet."
+                    )
+                    
+                    await send_direct_message(chat_id, success_msg, reply_markup=keyboard)
+                    
+                except httpx.HTTPStatusError as e:
+                    error_msg = e.response.text if e.response else str(e)
+                    await send_direct_message(chat_id, f"❌ **Swap Failed**\nAsset: {asset}\nError: SideShift rejected the request.\nDetails: {error_msg}")
+                except Exception as e:
+                    await send_direct_message(chat_id, f"❌ **Execution Error**\nCould not reach SideShift: {str(e)}")
+
+            # --- STEP 3: TRANSACTION SUBMITTED ---
+            elif status == "submitted":
+                tx_hash = web_app_payload.get("hash", "Unknown")
+                success_msg = (
+                    f"🎉 **Transaction Submitted Successfully!**\n\n"
+                    f"🔍 **Tx Hash:** `{tx_hash}`\n"
+                    f"[View on Explorer](https://etherscan.io/tx/{tx_hash})"
+                )
+                await send_direct_message(chat_id, success_msg)
+                
+        except json.JSONDecodeError:
+            await send_direct_message(chat_id, "⚠️ Received malformed data from the signer app.")
+            
         return {"status": "ok"}
 
     # --- EXISTING CHAT LOGIC ---
@@ -102,18 +146,14 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         if text == "/start":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
-            
             if not user:
                 db.add(User(chat_id=chat_id, is_active=True))
                 await db.commit()
-                welcome_msg = "Welcome to SentiTrade-AI! You will now receive high-confidence trade signals."
+                await send_direct_message(chat_id, "Welcome to SentiTrade-AI! You will now receive high-confidence trade signals.")
             else:
                 user.is_active = True
                 await db.commit()
-                welcome_msg = "Welcome back to SentiTrade-AI! Alerts are reactivated."
-                
-            await send_direct_message(chat_id, welcome_msg)
-
+                await send_direct_message(chat_id, "Welcome back to SentiTrade-AI! Alerts are reactivated.")
         elif text == "/stop":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
@@ -121,7 +161,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.is_active = False
                 await db.commit()
                 await send_direct_message(chat_id, "You have opted out of SentiTrade-AI alerts.")
-        
         else:
             reply_text = generate_chat_reply(text)
             await send_direct_message(chat_id, reply_text)
@@ -163,31 +202,24 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    
-async def execute_sideshift_trade(asset: str, action: str = "BUY", amount_usd: float = 100.0) -> dict:
-    """
-    Triggers a cross-chain swap directly using the SideShift API.
-    """
+
+# UPDATE: Pass settle_address as a parameter instead of env variable
+async def execute_sideshift_trade(asset: str, action: str = "BUY", amount_usd: float = 100.0, settle_address: str = None) -> dict:
     sideshift_api_url = "https://sideshift.ai/api/v2/shifts/variable"
-    
-    # Optional: SideShift secret if you are using a registered affiliate/API account
-    sideshift_secret = os.getenv("SIDESHIFT_SECRET", "") 
-    user_wallet = os.getenv("SETTLE_WALLET_ADDRESS")
+    sideshift_secret = os.getenv("SIDESHIFT_SECRET", "")
+    affiliateID = os.getenv("AFFILIATE_ID", "")
 
-    if not user_wallet:
-        raise ValueError("SETTLE_WALLET_ADDRESS is not configured in .env")
+    if not settle_address:
+        raise ValueError("Settle address is required to execute a swap.")
 
-    # Clean the ticker (e.g., $ETH -> eth)
     clean_asset = asset.replace("$", "").lower()
 
-    # Determine deposit and settle coins based on the action
-    # Assuming USDT on Ethereum as the base trading pair for this example
     if action == "BUY":
         deposit_coin = "usdt"
         deposit_network = "ethereum"
         settle_coin = clean_asset
-        settle_network = "ethereum" # Update this dynamically if trading cross-chain
-    else: # SELL
+        settle_network = "ethereum" 
+    else: 
         deposit_coin = clean_asset
         deposit_network = "ethereum"
         settle_coin = "usdt"
@@ -198,13 +230,11 @@ async def execute_sideshift_trade(asset: str, action: str = "BUY", amount_usd: f
         "depositNetwork": deposit_network,
         "settleCoin": settle_coin,
         "settleNetwork": settle_network,
-        "settleAddress": user_wallet,
-        # "affiliateId": "your_affiliate_id" # Uncomment if you have one
+        "settleAddress": settle_address,
+        "affiliateId": affiliateID
     }
 
-    headers = {
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     if sideshift_secret:
         headers["x-sideshift-secret"] = sideshift_secret
 
@@ -213,22 +243,26 @@ async def execute_sideshift_trade(asset: str, action: str = "BUY", amount_usd: f
         response.raise_for_status()
         return response.json()
 
-# --- TELEGRAM API HELPERS ---
-
-async def send_direct_message(chat_id: int, text: str):
+async def send_direct_message(chat_id: int, text: str, reply_markup: dict = None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
     async with httpx.AsyncClient() as client:
-        await client.post(url, json={"chat_id": chat_id, "text": text})
+        await client.post(url, json=payload)
 
 async def delete_telegram_message(chat_id: int, message_id: int):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage"
     async with httpx.AsyncClient() as client:
         await client.post(url, json={"chat_id": chat_id, "message_id": message_id})
 
-async def edit_telegram_message(chat_id: int, message_id: int, text: str):
+async def edit_telegram_message(chat_id: int, message_id: int, text: str, reply_markup: dict = None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
     async with httpx.AsyncClient() as client:
-        await client.post(url, json={"chat_id": chat_id, "message_id": message_id, "text": text})
+        await client.post(url, json=payload)
 
 async def answer_callback_query(callback_query_id: str, text: str = ""):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"

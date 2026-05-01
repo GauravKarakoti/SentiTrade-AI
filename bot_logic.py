@@ -151,23 +151,21 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
 async def send_telegram_alert(chat_id: int, signal: dict):
     if not TELEGRAM_BOT_TOKEN:
         return
-
-    # Point this to your deployed Next.js frontend
-    MINI_APP_URL = os.getenv("MINI_APP_URL")
     
-    # Clean the asset ticker and pass parameters to your Mini App
     clean_asset = signal['asset'].replace("$", "")
-    web_app_url = f"{MINI_APP_URL}/checkout?asset={clean_asset}&action={signal['action']}"
-
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # Use a web_app button instead of callback_data
+    # Use callback_data to trigger the SideShift logic in main.py
     keyboard = {
         "inline_keyboard": [
             [
                 {
-                    "text": "⚡ Execute Trade", 
-                    "web_app": {"url": web_app_url}
+                    "text": "⚡ Approve Trade", 
+                    "callback_data": f"approve_{clean_asset}"
+                },
+                {
+                    "text": "❌ Reject", 
+                    "callback_data": f"reject_{clean_asset}"
                 }
             ]
         ]
