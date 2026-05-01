@@ -6,7 +6,8 @@ from sqlalchemy import select
 from db import init_db, get_db, User
 from bot_logic import (
     fetch_news_from_api, deduplicate, build_prompt, 
-    analyze_with_llm, generate_signals, send_telegram_alert
+    analyze_with_llm, generate_signals, send_telegram_alert,
+    generate_chat_reply # <--- Added this import
 )
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -55,6 +56,12 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.is_active = False
                 await db.commit()
                 await send_direct_message(chat_id, "You have opted out of SentiTrade-AI alerts.")
+        
+        # --- NEW CHATBOT LOGIC ---
+        else:
+            # Handle any other text as a prompt to the LLM
+            reply_text = generate_chat_reply(text)
+            await send_direct_message(chat_id, reply_text)
 
     return {"status": "ok"}
 

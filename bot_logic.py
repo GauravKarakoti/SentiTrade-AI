@@ -79,6 +79,30 @@ Articles:
 {chr(10).join(articles)}
 """
 
+def generate_chat_reply(user_message: str) -> str:
+    """Generates a conversational response using Groq."""
+    if not GROQ_API_KEY:
+        print("❌ GROQ_API_KEY is missing.")
+        return "I am currently offline due to a missing API key."
+
+    client = Groq(api_key=GROQ_API_KEY)
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a concise, highly technical crypto trading assistant for SentiTrade-AI. Provide direct answers regarding blockchain, DeFi, and market analysis."
+                },
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.5,
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        print(f"❌ LLM Chat error: {e}")
+        return "Sorry, I encountered an error while processing your request."
+
 def analyze_with_llm(prompt: str) -> list[dict]:
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY is missing.")
