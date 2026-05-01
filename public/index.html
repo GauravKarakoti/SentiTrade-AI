@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SentiTrade Secure Signer</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .gradient-text { background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); transition: all 0.2s; }
+        .btn-primary:active { transform: scale(0.98); }
+        .loader { border: 3px solid #333; border-top: 3px solid #3b82f6; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="mb-8 text-center fade-in">
+        <h1 class="text-3xl font-bold tracking-tight">Swap<span class="gradient-text">Smith</span></h1>
+        <p class="text-slate-400 text-sm mt-1">Secure Transaction Signer</p>
+    </div>
+
+    <div class="glass-panel w-full max-w-md rounded-2xl p-6 shadow-2xl relative overflow-hidden fade-in">
+        
+        <div id="statusBadge" class="absolute top-4 right-4 bg-yellow-500/10 text-yellow-500 text-xs px-2 py-1 rounded-full border border-yellow-500/20 transition-colors duration-300">
+            Pending Sign
+        </div>
+
+        <div class="mt-4 space-y-6">
+            
+            <div class="text-center">
+                <p class="text-slate-400 text-xs uppercase tracking-wider mb-1" id="actionLabel">You are sending</p>
+                <div class="flex items-center justify-center space-x-2">
+                    <span class="text-4xl font-bold text-white" id="amountDisplay">0.00</span>
+                    <span class="text-xl text-slate-400" id="tokenDisplay">ETH</span>
+                </div>
+                <div class="flex items-center justify-center mt-2 space-x-2 text-sm text-slate-400">
+                    <span id="chainIcon">⛓️</span>
+                    <span id="chainDisplay">Ethereum</span>
+                </div>
+            </div>
+
+            <div class="h-px bg-slate-700 w-full"></div>
+
+            <div class="flex justify-between items-center text-sm">
+                <span class="text-slate-400">Destination</span>
+                <div class="flex items-center space-x-1">
+                    <span class="font-mono text-slate-200 bg-slate-800 px-2 py-1 rounded" id="toDisplay">0x...</span>
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center text-sm">
+                <span class="text-slate-400">Est. Network Fee</span>
+                <span class="text-slate-200">~ $0.45</span>
+            </div>
+        </div>
+
+        <div class="mt-8 space-y-3">
+            <button id="btnAction" class="btn-primary w-full py-4 rounded-xl font-bold text-lg shadow-lg flex justify-center items-center space-x-2 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
+                <span>Connect Wallet</span>
+            </button>
+            
+            <button id="btnDisconnect" class="w-full py-3 text-slate-400 text-sm hover:text-white transition hidden">
+                Disconnect Wallet
+            </button>
+        </div>
+
+        <p id="statusText" class="mt-4 text-center text-xs text-slate-500 h-4 transition-all duration-300"></p>
+    </div>
+
+    <p class="mt-6 text-xs text-slate-600 max-w-xs text-center fade-in">
+        <span class="mr-1">🔒</span> This transaction is executed directly by your wallet. SentiTrade never accesses your private keys.
+    </p>
+
+    <script type="module">
+        import { createWeb3Modal, defaultConfig } from 'https://esm.sh/@web3modal/ethers@5.1.11';
+        import { BrowserProvider, formatEther, parseUnits } from 'https://esm.sh/ethers@6.13.1';
+
+        // --- CONFIG ---
+        const projectId = 'cfd6d68649717d2118148c25c6fb5aec';
+        const metadata = { name: 'SentiTrade', description: 'DeFi Signer', url: window.location.origin, icons: [] };
+        
+        // Define Chains
+        const chains = [
+            { chainId: 1, name: 'Ethereum', currency: 'ETH', explorerUrl: 'https://etherscan.io', rpcUrl: 'https://cloudflare-eth.com' },
+            { chainId: 56, name: 'BNB Chain', currency: 'BNB', explorerUrl: 'https://bscscan.com', rpcUrl: 'https://binance.ulam.io' },
+            { chainId: 137, name: 'Polygon', currency: 'MATIC', explorerUrl: 'https://polygonscan.com', rpcUrl: 'https://polygon-rpc.com' },
+            { chainId: 8453, name: 'Base', currency: 'ETH', explorerUrl: 'https://basescan.org', rpcUrl: 'https://mainnet.base.org' },
+            { chainId: 42161, name: 'Arbitrum', currency: 'ETH', explorerUrl: 'https://arbiscan.io', rpcUrl: 'https://arb1.arbitrum.io/rpc' }
+        ];
+
+        const modal = createWeb3Modal({ ethersConfig: defaultConfig({ metadata }), chains, projectId });
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        // --- PARSE PARAMS ---
+        const urlParams = new URLSearchParams(window.location.search);
+        const txParams = {
+            to: urlParams.get('to'),
+            value: urlParams.get('value') || '0x0',
+            data: urlParams.get('data') || '0x',
+            chainId: parseInt(urlParams.get('chainId') || '1'),
+            token: urlParams.get('token') || 'ETH',
+            chain: urlParams.get('chain') || 'Ethereum',
+            intent: urlParams.get('intent') || 'swap',
+            amount: urlParams.get('amount')
+        };
+
+        // --- UPDATE UI ---
+        const actionLabels = {
+            'swap': 'You are Swapping',
+            'invest': 'You are Investing',
+            'portfolio': 'Portfolio Allocation'
+        };
+        document.getElementById('actionLabel').innerText = actionLabels[txParams.intent] || 'You are Sending';
+
+        try {
+            let displayAmt;
+            if (txParams.amount) {
+                displayAmt = txParams.amount;
+            } else {
+                displayAmt = txParams.value.startsWith('0x') ? formatEther(txParams.value) : txParams.value;
+            }
+
+            document.getElementById('amountDisplay').innerText = parseFloat(displayAmt).toFixed(4);
+            document.getElementById('tokenDisplay').innerText = txParams.token;
+            document.getElementById('chainDisplay').innerText = txParams.chain;
+            document.getElementById('toDisplay').innerText = `${txParams.to.slice(0, 6)}...${txParams.to.slice(-4)}`;
+        } catch (e) {
+            console.error(e);
+        }
+
+        // --- GUARD AGAINST INVALID PARAMS ---
+        if (!txParams.to) {
+            document.getElementById('statusText').innerText = "Invalid transaction parameters";
+            document.getElementById('statusText').classList.add('text-red-400');
+            document.getElementById('btnAction').disabled = true;
+            document.getElementById('btnAction').classList.add('opacity-50', 'cursor-not-allowed');
+        }
+
+        const btn = document.getElementById('btnAction');
+        const btnDisconnect = document.getElementById('btnDisconnect');
+        const statusText = document.getElementById('statusText');
+        const statusBadge = document.getElementById('statusBadge');
+        let walletProvider = null;
+
+        // --- WALLET LOGIC ---
+        modal.subscribeProvider(async ({ provider, address, chainId }) => {
+            if (provider) {
+                walletProvider = provider;
+                btn.disabled = false;
+                btn.innerHTML = `Sign Transaction <span class="ml-2">✍️</span>`;
+                btn.classList.remove('btn-primary');
+                btn.classList.add('bg-green-600', 'hover:bg-green-700', 'text-white');
+                btnDisconnect.style.display = "block";
+                statusBadge.innerText = "Wallet Connected";
+                statusBadge.className = "absolute top-4 right-4 bg-green-500/10 text-green-400 text-xs px-2 py-1 rounded-full border border-green-500/20 transition-colors duration-300";
+                
+                if (chainId !== txParams.chainId) {
+                    statusText.innerText = `Switching network to ${txParams.chain}...`;
+                    await modal.switchNetwork(txParams.chainId);
+                }
+            } else {
+                resetUI();
+            }
+        });
+
+        function resetUI() {
+            walletProvider = null;
+            btn.innerText = "Connect Wallet";
+            btn.classList.add('btn-primary');
+            btn.classList.remove('bg-green-600', 'hover:bg-green-700', 'text-white');
+            btn.disabled = false;
+            btnDisconnect.style.display = "none";
+            statusBadge.innerText = "Pending Sign";
+            statusBadge.className = "absolute top-4 right-4 bg-yellow-500/10 text-yellow-500 text-xs px-2 py-1 rounded-full border border-yellow-500/20 transition-colors duration-300";
+            statusText.innerText = "";
+        }
+
+        btn.onclick = async () => {
+            if (!walletProvider) {
+                // Disable button while connecting to prevent double-click
+                btn.disabled = true;
+                statusText.innerText = "Connecting wallet...";
+                statusText.classList.remove('text-red-400');
+                await modal.open();
+                // Re-enable button after modal interaction (subscribeProvider will update state)
+                setTimeout(() => {
+                    if (!walletProvider) {
+                        btn.disabled = false;
+                        statusText.innerText = "";
+                    }
+                }, 500);
+            } else {
+                await sendTransaction();
+            }
+        };
+
+        btnDisconnect.onclick = async () => {
+            await modal.open({ view: 'Account' });
+        };
+
+        async function sendTransaction() {
+            if (!walletProvider) return;
+            btn.disabled = true;
+            btn.innerHTML = `<div class="loader"></div>`;
+            statusText.innerText = "Check your wallet to confirm...";
+
+            try {
+                const ethersProvider = new BrowserProvider(walletProvider);
+                const signer = await ethersProvider.getSigner();
+                const tx = await signer.sendTransaction({
+                    to: txParams.to,
+                    value: txParams.value,
+                    data: txParams.data
+                });
+
+                statusText.innerText = "Transaction Sent!";
+                btn.innerText = "Success! Closing...";
+                
+                tg.sendData(JSON.stringify({ status: 'submitted', hash: tx.hash }));
+                setTimeout(() => tg.close(), 2000);
+            } catch (error) {
+                console.error(error);
+                btn.disabled = false;
+                btn.innerText = "Retry Sign";
+                statusText.innerText = "Error: " + (error.shortMessage || "Transaction rejected");
+                statusText.classList.add('text-red-400');
+            }
+        }
+    </script>
+</body>
+</html>

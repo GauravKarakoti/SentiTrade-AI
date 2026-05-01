@@ -152,18 +152,31 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     if not TELEGRAM_BOT_TOKEN:
         return
 
+    # Point this to your deployed Next.js frontend
+    MINI_APP_URL = os.getenv("MINI_APP_URL")
+    
+    # Clean the asset ticker and pass parameters to your Mini App
+    clean_asset = signal['asset'].replace("$", "")
+    web_app_url = f"{MINI_APP_URL}/checkout?asset={clean_asset}&action={signal['action']}"
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
+    # Use a web_app button instead of callback_data
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "✅ Execute", "callback_data": f"approve_{signal['asset']}"},
-                {"text": "❌ Cancel", "callback_data": f"reject_{signal['asset']}"}
+                {
+                    "text": "⚡ Execute Trade", 
+                    "web_app": {"url": web_app_url}
+                }
             ]
         ]
     }
+    
     payload = {
         "chat_id": chat_id,
-        "text": f"🚨 SentiTrade Signal\n📈 {signal['action']} {signal['asset']}\nConfidence: {signal['confidence']}%\nRationale: {signal['rationale']}",
+        "text": f"🚨 **SentiTrade Signal**\n📈 {signal['action']} {signal['asset']}\nConfidence: {signal['confidence']}%\nRationale: {signal['rationale']}",
+        "parse_mode": "Markdown",
         "reply_markup": json.dumps(keyboard)
     }
     

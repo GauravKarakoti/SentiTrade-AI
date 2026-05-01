@@ -45,9 +45,52 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             
         elif data.startswith("approve_"):
             asset = data.split("_")[1]
-            # Replace the signal with an execution confirmation
-            await edit_telegram_message(chat_id, message_id, f"✅ Executing trade for {asset}...")
-            await answer_callback_query(callback_id, "Execution started.")
+            
+            # 1. Stop the loading animation on the button
+            await answer_callback_query(callback_id, f"Initiating {asset} swap via SideShift...")
+            
+            # 2. Update the message text to show processing state
+            await edit_telegram_message(
+                chat_id, 
+                message_id, 
+                f"⏳ **Executing Trade...**\nGenerating direct SideShift order for {asset}."
+            )
+
+            try:
+                # 3. Call the direct SideShift Logic
+                trade_result = await execute_sideshift_trade(asset=asset, action="BUY")
+                
+                # 4. Confirm Success and provide deposit instructions
+                shift_id = trade_result.get("id", "Unknown")
+                deposit_address = trade_result.get("depositAddress", "N/A")
+                deposit_coin = trade_result.get("depositCoin", "").upper()
+                
+                success_msg = (
+                    f"✅ **SideShift Order Created**\n"
+                    f"Asset: {asset}\n"
+                    f"Order ID: `{shift_id}`\n\n"
+                    f"⚠️ **Action Required:**\n"
+                    f"Send your {deposit_coin} to the following address to complete the swap:\n"
+                    f"`{deposit_address}`"
+                )
+                
+                await edit_telegram_message(chat_id, message_id, success_msg)
+                
+            except httpx.HTTPStatusError as e:
+                # 5. Handle HTTP Failures from SideShift
+                error_msg = e.response.text if e.response else str(e)
+                await edit_telegram_message(
+                    chat_id, 
+                    message_id, 
+                    f"❌ **Swap Failed**\nAsset: {asset}\nError: SideShift rejected the request.\nDetails: {error_msg}"
+                )
+            except Exception as e:
+                # 6. Handle General Failures (timeouts, connection issues)
+                await edit_telegram_message(
+                    chat_id, 
+                    message_id, 
+                    f"❌ **Execution Error**\nAsset: {asset}\nCould not reach SideShift: {str(e)}"
+                )
 
         return {"status": "ok"}
 
@@ -120,6 +163,55 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    
+async def execute_sideshift_trade(asset: str, action: str = "BUY", amount_usd: float = 100.0) -> dict:
+    """
+    Triggers a cross-chain swap directly using the SideShift API.
+    """
+    sideshift_api_url = "https://sideshift.ai/api/v2/shifts/variable"
+    
+    # Optional: SideShift secret if you are using a registered affiliate/API account
+    sideshift_secret = os.getenv("SIDESHIFT_SECRET", "") 
+    user_wallet = os.getenv("SETTLE_WALLET_ADDRESS")
+
+    if not user_wallet:
+        raise ValueError("SETTLE_WALLET_ADDRESS is not configured in .env")
+
+    # Clean the ticker (e.g., $ETH -> eth)
+    clean_asset = asset.replace("$", "").lower()
+
+    # Determine deposit and settle coins based on the action
+    # Assuming USDT on Ethereum as the base trading pair for this example
+    if action == "BUY":
+        deposit_coin = "usdt"
+        deposit_network = "ethereum"
+        settle_coin = clean_asset
+        settle_network = "ethereum" # Update this dynamically if trading cross-chain
+    else: # SELL
+        deposit_coin = clean_asset
+        deposit_network = "ethereum"
+        settle_coin = "usdt"
+        settle_network = "ethereum"
+
+    payload = {
+        "depositCoin": deposit_coin,
+        "depositNetwork": deposit_network,
+        "settleCoin": settle_coin,
+        "settleNetwork": settle_network,
+        "settleAddress": user_wallet,
+        # "affiliateId": "your_affiliate_id" # Uncomment if you have one
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if sideshift_secret:
+        headers["x-sideshift-secret"] = sideshift_secret
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(sideshift_api_url, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
 # --- TELEGRAM API HELPERS ---
 
