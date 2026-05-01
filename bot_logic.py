@@ -7,13 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import NewsCache
 
-# Load environment variables
 SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
 SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# 1. ADDED 'asset' TO THE PYDANTIC MODEL
 class SentimentAnalysis(BaseModel):
     asset: str
     sentiment: str
@@ -38,8 +36,6 @@ async def fetch_news_from_api() -> list[dict]:
 
 async def deduplicate(items: list[dict], db: AsyncSession) -> list[dict]:
     new_items = []
-    
-    # Fetch all cached IDs from Neon
     result = await db.execute(select(NewsCache.news_id))
     seen_ids = set(row[0] for row in result.all())
 
@@ -47,7 +43,6 @@ async def deduplicate(items: list[dict], db: AsyncSession) -> list[dict]:
         nid = str(item.get("id"))
         if nid and nid not in seen_ids:
             new_items.append(item)
-            # Add to DB session (will be committed in the main loop)
             db.add(NewsCache(news_id=nid))
             seen_ids.add(nid)
             
@@ -56,23 +51,21 @@ async def deduplicate(items: list[dict], db: AsyncSession) -> list[dict]:
 def build_prompt(news_batch: list[dict]) -> str:
     articles = []
     for n in news_batch[:10]:
-        # Extract the first matched currency symbol if it exists
         matched = n.get("matched_currencies")
         asset = matched[0].get("name", "N/A") if matched and isinstance(matched, list) else "N/A"
-        
-        # Use 'content' instead of 'summary'
         content = n.get("content", "No Content")
-        
         articles.append(f"- {n.get('title', 'No Title')} (Asset: {asset}) | Content: {content}")
 
+    # UPDATED: Agentic system identity
     return f"""
-You are a crypto news sentiment analyst. Below is a list of recent headlines and summaries.
+You are an autonomous SoSoValue Agentic System operating on the ValueChain.
+Analyze the following financial data to provide actionable intelligence for the One-Person economy.
 For each article, output a JSON object with:
-- "asset": The specific cryptocurrency ticker symbol with a '$' prefix (e.g., "$HYPE", "$ADA"). If the text only mentions the project name (e.g., "Hyperliquid", "Cardano"), you MUST infer and output its standard ticker. Pay close attention to the provided "(Asset: ...)" hint. Only return "UNKNOWN" if no specific project can be identified at all.
+- "asset": The specific cryptocurrency ticker symbol with a '$' prefix (e.g., "$HYPE").
 - "sentiment": one of "bullish", "bearish", "neutral"
 - "confidence": integer between 0 and 100
-- "narrative_tags": array of relevant tags (e.g., "ETF inflow", "network outage")
-- "rationale": a short sentence explaining the sentiment (max 150 characters)
+- "narrative_tags": array of relevant tags (e.g., "AI x Web3", "SoDEX Liquidity")
+- "rationale": a short sentence explaining the autonomous decision (max 150 chars).
 
 Return the result as a JSON array of objects, with one object per article.
 Articles:
@@ -80,9 +73,7 @@ Articles:
 """
 
 def generate_chat_reply(user_message: str) -> str:
-    """Generates a conversational response using Groq."""
     if not GROQ_API_KEY:
-        print("❌ GROQ_API_KEY is missing.")
         return "I am currently offline due to a missing API key."
 
     client = Groq(api_key=GROQ_API_KEY)
@@ -92,7 +83,7 @@ def generate_chat_reply(user_message: str) -> str:
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a concise, highly technical crypto trading assistant for SentiTrade-AI. Provide direct answers regarding blockchain, DeFi, and market analysis."
+                    "content": "You are the SentiTrade-AI Agent, powered by SoSoValue. You provide intelligent, precise insights regarding the ValueChain, SoDEX routing, and on-chain finance."
                 },
                 {"role": "user", "content": user_message}
             ],
@@ -100,13 +91,10 @@ def generate_chat_reply(user_message: str) -> str:
         )
         return completion.choices[0].message.content
     except Exception as e:
-        print(f"❌ LLM Chat error: {e}")
         return "Sorry, I encountered an error while processing your request."
 
 def analyze_with_llm(prompt: str) -> list[dict]:
-    if not GROQ_API_KEY:
-        print("❌ GROQ_API_KEY is missing.")
-        return []
+    if not GROQ_API_KEY: return []
 
     client = Groq(api_key=GROQ_API_KEY)
     try:
@@ -127,11 +115,9 @@ def analyze_with_llm(prompt: str) -> list[dict]:
         for v in data.values():
             if isinstance(v, list): return v
         raise ValueError("Unexpected JSON structure returned from LLM")
-    except Exception as e:
-        print(f"❌ LLM error: {e}")
+    except Exception:
         return []
 
-# 3. UPDATED SIGNAL GENERATION TO USE THE NEW EXPLICIT ASSET FIELD
 def generate_signals(analyses: list[dict]) -> list[dict]:
     signals = []
     for a in analyses:
@@ -139,7 +125,7 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
             sa = SentimentAnalysis(**a)
             if sa.confidence >= 80 and sa.sentiment in ("bullish", "bearish"):
                 signals.append({
-                    "asset": sa.asset,  # <--- Now grabs the explicit asset field
+                    "asset": sa.asset,
                     "action": "BUY" if sa.sentiment == "bullish" else "SELL",
                     "confidence": sa.confidence,
                     "rationale": sa.rationale
@@ -159,20 +145,21 @@ async def send_telegram_alert(chat_id: int, signal: dict):
         "inline_keyboard": [
             [
                 {
-                    "text": "⚡ Approve Trade", 
+                    "text": "⚡ Route via SoDEX", 
                     "callback_data": f"approve_{clean_asset}"
                 },
                 {
-                    "text": "❌ Reject", 
+                    "text": "❌ Ignore", 
                     "callback_data": f"reject_{clean_asset}"
                 }
             ]
         ]
     }
     
+    # UPDATED: Terminology reflects the new ecosystem
     payload = {
         "chat_id": chat_id,
-        "text": f"🚨 **SentiTrade Signal**\n📈 {signal['action']} {signal['asset']}\nConfidence: {signal['confidence']}%\nRationale: {signal['rationale']}",
+        "text": f"🌐 **ValueChain Intelligence**\n🤖 Action: {signal['action']} {signal['asset']}\nConfidence: {signal['confidence']}%\nRationale: {signal['rationale']}",
         "parse_mode": "Markdown",
         "reply_markup": json.dumps(keyboard)
     }

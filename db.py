@@ -2,7 +2,8 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, BigInteger, Boolean
+from sqlalchemy import Column, String, BigInteger, Boolean, Integer, DateTime
+from datetime import datetime
 
 load_dotenv()
 
@@ -23,6 +24,17 @@ class User(Base):
 class NewsCache(Base):
     __tablename__ = "news_cache"
     news_id = Column(String, primary_key=True, index=True)
+
+# NEW: ValueChain tracking for the Agentic System
+class ValueChainAnalytics(Base):
+    __tablename__ = "valuechain_analytics"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    asset = Column(String, index=True)
+    sentiment = Column(String)
+    confidence = Column(Integer)
+    rationale = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    sodex_routed = Column(Boolean, default=False)
 
 async def init_db():
     """Creates tables if they don't exist."""

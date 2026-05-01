@@ -10,17 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from eth_utils import keccak
 
-from db import init_db, get_db, User
+from db import init_db, get_db, User, ValueChainAnalytics
 from bot_logic import (
     fetch_news_from_api, deduplicate, build_prompt, 
     analyze_with_llm, generate_signals, send_telegram_alert,
     generate_chat_reply
 )
 
-# Environment Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MINI_APP_URL = os.getenv("MINI_APP_URL")
-# Default to mainnet, but allow override for testing
 SODEX_SPOT_API = os.getenv("SODEX_SPOT_API", "https://mainnet-gw.sodex.dev/api/v1/spot")
 
 @asynccontextmanager
@@ -37,7 +35,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     except Exception:
         return {"status": "error"}
 
-    # --- HANDLE BUTTON CLICKS (CALLBACK QUERIES) ---
     if "callback_query" in update:
         callback_query = update["callback_query"]
         callback_id = callback_query["id"]
@@ -47,20 +44,19 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
         if data.startswith("reject_"):
             await delete_telegram_message(chat_id, message_id)
-            await answer_callback_query(callback_id, "Signal deleted.")
+            await answer_callback_query(callback_id, "Signal discarded from ValueChain.")
             
         elif data.startswith("approve_"):
             asset = data.split("_")[1]
-            await answer_callback_query(callback_id, "Requesting wallet connection...")
+            await answer_callback_query(callback_id, "Initializing Agentic Routing...")
             
-            # STEP 1: Ask for connection first. Pass the asset so we remember what we are trading.
             web_app_url = f"{MINI_APP_URL}?intent=connect&asset={asset}"
             
             keyboard = {
                 "keyboard": [
                     [
                         {
-                            "text": "🔗 Connect Wallet to Set Destination", 
+                            "text": "🔗 Connect Wallet to Access SoDEX", 
                             "web_app": {"url": web_app_url}
                         }
                     ]
@@ -70,7 +66,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             }
             await send_direct_message(
                 chat_id, 
-                f"⚡ **Initiating {asset} Trade on SoDEX**\n\nPlease connect your wallet below.",
+                f"⚡ **Agentic Execution: {asset}**\n\nTo navigate on-chain finance with precision, please connect your wallet.",
                 reply_markup=keyboard
             )
 
@@ -83,18 +79,16 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             web_app_payload = json.loads(update["message"]["web_app_data"]["data"])
             status = web_app_payload.get("status")
 
-            # --- STEP 2: WALLET CONNECTED -> GENERATE SODEX ORDER ---
             if status == "connected":
                 user_address = web_app_payload.get("address")
                 asset = web_app_payload.get("asset", "Unknown")
                 
-                await send_direct_message(chat_id, f"⏳ **Executing Trade...**\nPreparing SoDEX order for {asset}.")
+                await send_direct_message(chat_id, f"⏳ **Analyzing ValueChain...**\nPreparing AI-driven SoDEX order for {asset}.")
                 
                 try:
                     order_data = await prepare_sodex_order(asset=asset, action="BUY", address=user_address)
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
 
-                    # Pass the payload hash, nonce, AND chainId to the Mini App for EIP-712 signing
                     query_params = urllib.parse.urlencode({
                         "intent": "sign_sodex",
                         "hash": order_data["payload_hash"],
@@ -106,12 +100,11 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     
                     web_app_url = f"{MINI_APP_URL}?{query_params}"
                     
-                    # --- UPDATED: Standard Reply Keyboard instead of Inline ---
                     keyboard = {
                         "keyboard": [
                             [
                                 {
-                                    "text": f"🔐 Sign SoDEX Order", 
+                                    "text": f"🔐 Authorize Agentic Trade", 
                                     "web_app": {"url": web_app_url}
                                 }
                             ]
@@ -120,20 +113,18 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         "one_time_keyboard": True
                     }
 
-                    success_msg = f"✅ **SoDEX Order Ready**\nAsset: {asset}\n\n⚠️ **Action Required:**\nClick the button at the bottom of your screen to securely sign the EIP-712 payload."
+                    success_msg = f"✅ **SoSoValue Agent Ready**\nAsset: {asset}\n\n⚠️ **Action Required:**\nSign the payload to authorize execution on the ValueChain."
                     await send_direct_message(chat_id, success_msg, reply_markup=keyboard)
                     
                 except Exception as e:
-                    await send_direct_message(chat_id, f"❌ **Execution Error:** {str(e)}")
+                    await send_direct_message(chat_id, f"❌ **ValueChain Error:** {str(e)}")
 
-            # --- STEP 3: TRANSACTION SIGNED -> SUBMIT TO SODEX ---
             elif status == "sodex_signed":
                 signature = web_app_payload.get("signature")
                 raw_payload = web_app_payload.get("payload")
                 nonce = web_app_payload.get("nonce")
                 user_address = web_app_payload.get("address")
                 
-                # Append 0x01 byte prefix for SoDEX typed signatures
                 typed_sig = "0x01" + signature[2:]
                 
                 headers = {
@@ -144,7 +135,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     "X-API-Nonce": str(nonce)
                 }
                 
-                # SoDEX HTTP request body contains ONLY the `params` object
                 params_only = json.loads(raw_payload)["params"]
                 
                 async with httpx.AsyncClient() as client:
@@ -154,22 +144,19 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     if resp.status_code == 200 and resp_data.get("data", [{}])[0].get("code") == 0:
                         order_id = resp_data["data"][0].get("orderID", "Unknown")
                         
-                        # Added ReplyKeyboardRemove to clean up the keyboard after success
                         remove_keyboard = {"remove_keyboard": True}
-                        await send_direct_message(chat_id, f"🎉 **Trade Executed!**\nSoDEX Order ID: `{order_id}`", reply_markup=remove_keyboard)
+                        await send_direct_message(chat_id, f"🎉 **Intelligent Trade Executed!**\nSoDEX Order ID: `{order_id}`\n\n*Welcome to the future of finance.*", reply_markup=remove_keyboard)
                     else:
                         error_detail = resp_data.get("data", [{}])[0].get("error", resp.text)
                         
-                        # Clean up keyboard on failure too
                         remove_keyboard = {"remove_keyboard": True}
-                        await send_direct_message(chat_id, f"❌ **SoDEX Rejection:**\n`{error_detail}`", reply_markup=remove_keyboard)
+                        await send_direct_message(chat_id, f"❌ **SoDEX Execution Failed:**\n`{error_detail}`", reply_markup=remove_keyboard)
                         
         except json.JSONDecodeError:
-            await send_direct_message(chat_id, "⚠️ Received malformed data from the signer app.")
+            await send_direct_message(chat_id, "⚠️ Received malformed data from the agent interface.")
             
         return {"status": "ok"}
 
-    # --- EXISTING CHAT LOGIC ---
     if "message" in update and "text" in update["message"]:
         chat_id = update["message"]["chat"]["id"]
         text = update["message"]["text"].strip()
@@ -180,18 +167,18 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             if not user:
                 db.add(User(chat_id=chat_id, is_active=True))
                 await db.commit()
-                await send_direct_message(chat_id, "Welcome to SentiTrade! You will now receive high-confidence trade signals.")
+                await send_direct_message(chat_id, "Welcome to the SoSoValue Ecosystem! SentiTrade-AI will now route actionable intelligence to you.")
             else:
                 user.is_active = True
                 await db.commit()
-                await send_direct_message(chat_id, "Welcome back to SentiTrade! Alerts are reactivated.")
+                await send_direct_message(chat_id, "Agentic alerts reactivated.")
         elif text == "/stop":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
             if user:
                 user.is_active = False
                 await db.commit()
-                await send_direct_message(chat_id, "You have opted out of SentiTrade alerts.")
+                await send_direct_message(chat_id, "Agent offline. You have opted out of the ValueChain stream.")
         else:
             reply_text = generate_chat_reply(text)
             await send_direct_message(chat_id, reply_text)
@@ -201,41 +188,40 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
 @app.post("/run-analysis")
 async def run_analysis(db: AsyncSession = Depends(get_db)):
-    """
-    Endpoint to trigger the data pipeline. 
-    Call this securely via a Cron Job (e.g., cron-job.org) every X minutes.
-    """
     try:
-        # 1. Fetch & Deduplicate
         news_items = await fetch_news_from_api()
         new_news = await deduplicate(news_items, db)
         
         if not new_news:
-            return {"status": "no_new_news"}
+            return {"status": "no_new_data"}
 
-        # 2. Analyze
         prompt = build_prompt(new_news)
         analyses = analyze_with_llm(prompt)
         signals = generate_signals(analyses)
 
-        # 3. Broadcast to active users
         if signals:
             result = await db.execute(select(User.chat_id).filter(User.is_active == True))
             active_chat_ids = [row[0] for row in result.all()]
 
             for signal in signals:
+                # NEW: Log to ValueChainAnalytics
+                db.add(ValueChainAnalytics(
+                    asset=signal["asset"],
+                    sentiment=signal["action"],
+                    confidence=signal["confidence"],
+                    rationale=signal["rationale"]
+                ))
+
                 for chat_id in active_chat_ids:
                     await send_telegram_alert(chat_id, signal)
         
-        # Commit the new cached news IDs
         await db.commit()
-        return {"status": "success", "signals_generated": len(signals)}
+        return {"status": "success", "agentic_actions_routed": len(signals)}
 
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     
-
 async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd: float = 100.0) -> dict:
     """Prepares the SoDEX order payload and hash for EIP-712 signing."""
     

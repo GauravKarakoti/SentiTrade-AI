@@ -3,16 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SentiTrade Secure Signer</title>
+    <title>SentiTrade | Powered by SoSoValue</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; }
-        .gradient-text { background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); transition: all 0.2s; }
+        /* Updated gradient to reflect a more Web3/AI thematic feel */
+        .gradient-text { background: linear-gradient(to right, #00f2fe, #4facfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .glass-panel { background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(0, 242, 254, 0.2); }
+        .btn-primary { background: linear-gradient(135deg, #00f2fe, #4facfe); transition: all 0.2s; color: #0f172a;}
         .btn-primary:active { transform: scale(0.98); }
-        .loader { border: 3px solid #333; border-top: 3px solid #3b82f6; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+        .loader { border: 3px solid #333; border-top: 3px solid #00f2fe; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .fade-in { animation: fadeIn 0.3s ease-in; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -22,26 +23,26 @@
 
     <div class="mb-8 text-center fade-in">
         <h1 class="text-3xl font-bold tracking-tight">Senti<span class="gradient-text">Trade</span></h1>
-        <p class="text-slate-400 text-sm mt-1">Secure Transaction Signer</p>
+        <p class="text-slate-400 text-sm mt-1">Agentic Signer • SoSoValue Ecosystem</p>
     </div>
 
     <div class="glass-panel w-full max-w-md rounded-2xl p-6 shadow-2xl relative overflow-hidden fade-in">
         
         <div id="statusBadge" class="absolute top-4 right-4 bg-yellow-500/10 text-yellow-500 text-xs px-2 py-1 rounded-full border border-yellow-500/20 transition-colors duration-300">
-            Pending Sign
+            Pending Action
         </div>
 
         <div class="mt-4 space-y-6">
             
             <div class="text-center">
-                <p class="text-slate-400 text-xs uppercase tracking-wider mb-1" id="actionLabel">You are sending</p>
+                <p class="text-slate-400 text-xs uppercase tracking-wider mb-1" id="actionLabel">Agent Routing</p>
                 <div class="flex items-center justify-center space-x-2">
                     <span class="text-4xl font-bold text-white" id="amountDisplay">0.00</span>
                     <span class="text-xl text-slate-400" id="tokenDisplay">ETH</span>
                 </div>
                 <div class="flex items-center justify-center mt-2 space-x-2 text-sm text-slate-400">
-                    <span id="chainIcon">⛓️</span>
-                    <span id="chainDisplay">Ethereum</span>
+                    <span id="chainIcon">🌐</span>
+                    <span id="chainDisplay">ValueChain</span>
                 </div>
             </div>
 
@@ -50,19 +51,19 @@
             <div class="flex justify-between items-center text-sm">
                 <span class="text-slate-400">Destination</span>
                 <div class="flex items-center space-x-1">
-                    <span class="font-mono text-slate-200 bg-slate-800 px-2 py-1 rounded" id="toDisplay">0x...</span>
+                    <span class="font-mono text-slate-200 bg-slate-800 px-2 py-1 rounded border border-slate-700" id="toDisplay">0x...</span>
                 </div>
             </div>
 
             <div class="flex justify-between items-center text-sm" id="networkFeeRow">
                 <span class="text-slate-400">Est. Network Fee</span>
-                <span class="text-slate-200">~ $0.45</span>
+                <span class="text-slate-200">~ $0.00</span>
             </div>
         </div>
 
         <div class="mt-8 space-y-3">
             <button id="btnAction" class="btn-primary w-full py-4 rounded-xl font-bold text-lg shadow-lg flex justify-center items-center space-x-2 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
-                <span>Connect Wallet</span>
+                <span>Connect to ValueChain</span>
             </button>
             
             <button id="btnDisconnect" class="w-full py-3 text-slate-400 text-sm hover:text-white transition hidden">
@@ -73,8 +74,8 @@
         <p id="statusText" class="mt-4 text-center text-xs text-slate-500 h-4 transition-all duration-300"></p>
     </div>
 
-    <p class="mt-6 text-xs text-slate-600 max-w-xs text-center fade-in">
-        <span class="mr-1">🔒</span> This transaction is executed directly by your wallet. SentiTrade never accesses your private keys.
+    <p class="mt-6 text-xs text-slate-500 max-w-xs text-center fade-in">
+        <span class="mr-1">🤖</span> AI x Web3 execution via <span class="text-slate-300">SoDEX</span>. Your private keys remain on your device.
     </p>
 
     <script type="module">
