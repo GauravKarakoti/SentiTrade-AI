@@ -7,13 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import NewsCache
 
-# Load environment variables (handled by main.py usually, but safe here)
+# Load environment variables
 SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
 SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# 1. ADDED 'asset' TO THE PYDANTIC MODEL
 class SentimentAnalysis(BaseModel):
+    asset: str
     sentiment: str
     confidence: int
     narrative_tags: list[str]
@@ -66,6 +68,7 @@ def build_prompt(news_batch: list[dict]) -> str:
     return f"""
 You are a crypto news sentiment analyst. Below is a list of recent headlines and summaries.
 For each article, output a JSON object with:
+- "asset": The specific cryptocurrency ticker symbol with a '$' prefix (e.g., "$HYPE", "$ADA"). If the text only mentions the project name (e.g., "Hyperliquid", "Cardano"), you MUST infer and output its standard ticker. Pay close attention to the provided "(Asset: ...)" hint. Only return "UNKNOWN" if no specific project can be identified at all.
 - "sentiment": one of "bullish", "bearish", "neutral"
 - "confidence": integer between 0 and 100
 - "narrative_tags": array of relevant tags (e.g., "ETF inflow", "network outage")
@@ -104,6 +107,7 @@ def analyze_with_llm(prompt: str) -> list[dict]:
         print(f"❌ LLM error: {e}")
         return []
 
+# 3. UPDATED SIGNAL GENERATION TO USE THE NEW EXPLICIT ASSET FIELD
 def generate_signals(analyses: list[dict]) -> list[dict]:
     signals = []
     for a in analyses:
@@ -111,7 +115,7 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
             sa = SentimentAnalysis(**a)
             if sa.confidence >= 80 and sa.sentiment in ("bullish", "bearish"):
                 signals.append({
-                    "asset": sa.narrative_tags[0] if sa.narrative_tags else "UNKNOWN",
+                    "asset": sa.asset,  # <--- Now grabs the explicit asset field
                     "action": "BUY" if sa.sentiment == "bullish" else "SELL",
                     "confidence": sa.confidence,
                     "rationale": sa.rationale
