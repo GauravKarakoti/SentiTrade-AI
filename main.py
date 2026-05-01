@@ -92,7 +92,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 
                 try:
                     order_data = await prepare_sodex_order(asset=asset, action="BUY", address=user_address)
-                    print("prepared")
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
 
                     # Pass the payload hash, nonce, AND chainId to the Mini App for EIP-712 signing
@@ -244,7 +243,6 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
     target_symbol_name = f"v{clean_asset}_vUSDC"
     
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # 1. Fetch Dynamic Account ID
         state_resp = await client.get(f"{SODEX_SPOT_API}/accounts/{address}/state")
         state_resp.raise_for_status()
         state_data = state_resp.json()
@@ -252,20 +250,22 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         if state_data.get("code") != 0 or not state_data.get("data"):
             raise ValueError(f"Wallet address {address[:6]} not recognized. Have you initialized your SoDEX account?")
         
-        sodex_account_id = state_data["data"]["aid"]
+        # Cast the string ID to an integer
+        sodex_account_id = int(state_data["data"]["aid"])
+        
+        # --- NEW: Catch uninitialized (zero) accounts ---
+        if sodex_account_id == 0:
+            raise ValueError(f"Wallet `{address[:6]}...` is not initialized on SoDEX. Please connect to the SoDEX dApp and deposit funds to activate your trading account first. \n\n 👉 https://sodex.com/")
 
         # 2. Fetch Dynamic Symbol ID via Direct Query
-        # We only pass 'symbol' to keep the request clean
         symbols_resp = await client.get(
             f"{SODEX_SPOT_API}/markets/symbols",
             params={"symbol": target_symbol_name}
         )
         
-        # SoDEX returns HTTP 200 but uses application-level error codes in the JSON
         symbols_data = symbols_resp.json()
         print(f"SoDEX Symbol Query Response: {symbols_data}")
         
-        # --- UPDATED: Graceful Error Handling ---
         if symbols_data.get("code") != 0:
             error_text = str(symbols_data.get("error", "")).lower()
             if "symbol not found" in error_text:
@@ -276,7 +276,6 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         symbol_id = None
         data_payload = symbols_data.get("data")
         
-        # Handle the response whether the API returns a single object or a filtered list
         if isinstance(data_payload, dict) and data_payload.get("id"):
             symbol_id = data_payload.get("id")
         elif isinstance(data_payload, list) and len(data_payload) > 0:
@@ -289,9 +288,10 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
             raise ValueError(f"Failed to locate the ID for '{clean_asset}' on SoDEX.")
 
     # 3. Prepare the Order Structure
+    # --- FIX: Reverted to strict matching (symbolID, clOrdID) per SoDEX API docs ---
     order_item = {
-        "symbolID": symbol_id,
-        "clOrdID": str(uuid.uuid4())[:36],
+        "symbolID": symbol_id,             
+        "clOrdID": str(uuid.uuid4())[:36], 
         "side": 1 if action == "BUY" else 2,
         "type": 2,        # 2 = MARKET
         "timeInForce": 3, # 3 = IOC
@@ -305,7 +305,7 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
     payload = {
         "type": "newOrder",
         "params": {
-            "accountID": sodex_account_id,
+            "accountID": sodex_account_id, # Must be integer!
             "orders": [order_item]
         }
     }
