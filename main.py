@@ -57,25 +57,25 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             web_app_url = f"{MINI_APP_URL}?intent=connect&asset={asset}"
             
             keyboard = {
-                "inline_keyboard": [
+                "keyboard": [
                     [
                         {
                             "text": "🔗 Connect Wallet to Set Destination", 
                             "web_app": {"url": web_app_url}
                         }
                     ]
-                ]
+                ],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
             }
-            await edit_telegram_message(
+            await send_direct_message(
                 chat_id, 
-                message_id, 
-                f"⚡ **Initiating {asset} Trade on SoDEX**\n\nPlease connect your wallet to designate a settlement address.",
+                f"⚡ **Initiating {asset} Trade on SoDEX**\n\nPlease connect your wallet below.",
                 reply_markup=keyboard
             )
 
         return {"status": "ok"}
 
-    # --- HANDLE WEB APP DATA RETURNED FROM MINI APP ---
     if "message" in update and "web_app_data" in update["message"]:
         chat_id = update["message"]["chat"]["id"]
         
@@ -92,6 +92,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 
                 try:
                     order_data = await prepare_sodex_order(asset=asset, action="BUY", address=user_address)
+                    print("prepared")
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
 
                     # Pass the payload hash, nonce, AND chainId to the Mini App for EIP-712 signing
@@ -101,16 +102,26 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         "nonce": order_data["nonce"],
                         "payload": order_data["compact_json"],
                         "address": user_address,
-                        "sodexChainId": sodex_chain_id # ADD THIS LINE
+                        "sodexChainId": sodex_chain_id 
                     })
                     
                     web_app_url = f"{MINI_APP_URL}?{query_params}"
                     
+                    # --- UPDATED: Standard Reply Keyboard instead of Inline ---
                     keyboard = {
-                        "inline_keyboard": [[{"text": f"🔐 Sign SoDEX Order", "web_app": {"url": web_app_url}}]]
+                        "keyboard": [
+                            [
+                                {
+                                    "text": f"🔐 Sign SoDEX Order", 
+                                    "web_app": {"url": web_app_url}
+                                }
+                            ]
+                        ],
+                        "resize_keyboard": True,
+                        "one_time_keyboard": True
                     }
 
-                    success_msg = f"✅ **SoDEX Order Ready**\nAsset: {asset}\n\n⚠️ **Action Required:**\nClick below to securely sign the EIP-712 payload."
+                    success_msg = f"✅ **SoDEX Order Ready**\nAsset: {asset}\n\n⚠️ **Action Required:**\nClick the button at the bottom of your screen to securely sign the EIP-712 payload."
                     await send_direct_message(chat_id, success_msg, reply_markup=keyboard)
                     
                 except Exception as e:
@@ -143,10 +154,16 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     
                     if resp.status_code == 200 and resp_data.get("data", [{}])[0].get("code") == 0:
                         order_id = resp_data["data"][0].get("orderID", "Unknown")
-                        await send_direct_message(chat_id, f"🎉 **Trade Executed!**\nSoDEX Order ID: `{order_id}`")
+                        
+                        # Added ReplyKeyboardRemove to clean up the keyboard after success
+                        remove_keyboard = {"remove_keyboard": True}
+                        await send_direct_message(chat_id, f"🎉 **Trade Executed!**\nSoDEX Order ID: `{order_id}`", reply_markup=remove_keyboard)
                     else:
                         error_detail = resp_data.get("data", [{}])[0].get("error", resp.text)
-                        await send_direct_message(chat_id, f"❌ **SoDEX Rejection:**\n`{error_detail}`")
+                        
+                        # Clean up keyboard on failure too
+                        remove_keyboard = {"remove_keyboard": True}
+                        await send_direct_message(chat_id, f"❌ **SoDEX Rejection:**\n`{error_detail}`", reply_markup=remove_keyboard)
                         
         except json.JSONDecodeError:
             await send_direct_message(chat_id, "⚠️ Received malformed data from the signer app.")
@@ -224,11 +241,10 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
     """Prepares the SoDEX order payload and hash for EIP-712 signing."""
     
     clean_asset = asset.replace('$', '').upper()
-    # Assuming typical spot pairing format on SoDEX like vBTC_vUSDC
     target_symbol_name = f"v{clean_asset}_vUSDC"
     
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # 1. Fetch Dynamic Account ID[cite: 4]
+        # 1. Fetch Dynamic Account ID
         state_resp = await client.get(f"{SODEX_SPOT_API}/accounts/{address}/state")
         state_resp.raise_for_status()
         state_data = state_resp.json()
@@ -238,34 +254,49 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         
         sodex_account_id = state_data["data"]["aid"]
 
-        # 2. Fetch Dynamic Symbol ID[cite: 4]
-        symbols_resp = await client.get(f"{SODEX_SPOT_API}/markets/symbols")
-        symbols_resp.raise_for_status()
-        symbols_data = symbols_resp.json()
+        # 2. Fetch Dynamic Symbol ID via Direct Query
+        # We only pass 'symbol' to keep the request clean
+        symbols_resp = await client.get(
+            f"{SODEX_SPOT_API}/markets/symbols",
+            params={"symbol": target_symbol_name}
+        )
         
+        # SoDEX returns HTTP 200 but uses application-level error codes in the JSON
+        symbols_data = symbols_resp.json()
+        print(f"SoDEX Symbol Query Response: {symbols_data}")
+        
+        # --- UPDATED: Graceful Error Handling ---
         if symbols_data.get("code") != 0:
-            raise ValueError("Failed to fetch available markets from SoDEX.")
+            error_text = str(symbols_data.get("error", "")).lower()
+            if "symbol not found" in error_text:
+                raise ValueError(f"Trade aborted: '{clean_asset}' is not currently listed on SoDEX.")
+            else:
+                raise ValueError(f"SoDEX API Error: {error_text}")
             
         symbol_id = None
-        for sym in symbols_data.get("data", []):
-            if sym.get("name") == target_symbol_name:
-                symbol_id = sym.get("id")
-                break
-                
-        if symbol_id is None:
-            raise ValueError(f"Asset '{target_symbol_name}' is currently not supported on SoDEX.")
+        data_payload = symbols_data.get("data")
+        
+        # Handle the response whether the API returns a single object or a filtered list
+        if isinstance(data_payload, dict) and data_payload.get("id"):
+            symbol_id = data_payload.get("id")
+        elif isinstance(data_payload, list) and len(data_payload) > 0:
+            for sym in data_payload:
+                if sym.get("name", "").upper() == target_symbol_name.upper():
+                    symbol_id = sym.get("id")
+                    break
 
-    # CRITICAL: Keys must exactly match the Go struct order per SoDEX API docs[cite: 1]
-    # Order: symbolID, clOrdID, side, type, timeInForce, [price, quantity, funds]
+        if not symbol_id:
+            raise ValueError(f"Failed to locate the ID for '{clean_asset}' on SoDEX.")
+
+    # 3. Prepare the Order Structure
     order_item = {
         "symbolID": symbol_id,
         "clOrdID": str(uuid.uuid4())[:36],
         "side": 1 if action == "BUY" else 2,
-        "type": 2,        # 2 = MARKET[cite: 4]
-        "timeInForce": 3, # 3 = IOC[cite: 4]
+        "type": 2,        # 2 = MARKET
+        "timeInForce": 3, # 3 = IOC
     }
     
-    # DecimalString fields must be strings, not floats[cite: 1]
     if action == "BUY":
         order_item["funds"] = str(amount_usd)
     else:
@@ -279,11 +310,8 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         }
     }
     
-    # Compact JSON serialization (no whitespace) required for signature generation[cite: 1]
     compact_json = json.dumps(payload, separators=(',', ':'))
     payload_hash = "0x" + keccak(text=compact_json).hex()
-    
-    # Nonce must be Unix millisecond timestamp[cite: 1]
     nonce = int(time.time() * 1000)
     
     return {

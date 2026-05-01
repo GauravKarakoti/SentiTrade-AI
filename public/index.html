@@ -85,13 +85,16 @@
         const projectId = 'cfd6d68649717d2118148c25c6fb5aec';
         const metadata = { name: 'SentiTrade', description: 'DeFi Signer', url: window.location.origin, icons: [] };
         
-        // Define Chains
         const chains = [
             { chainId: 1, name: 'Ethereum', currency: 'ETH', explorerUrl: 'https://etherscan.io', rpcUrl: 'https://cloudflare-eth.com' },
             { chainId: 56, name: 'BNB Chain', currency: 'BNB', explorerUrl: 'https://bscscan.com', rpcUrl: 'https://binance.ulam.io' },
             { chainId: 137, name: 'Polygon', currency: 'MATIC', explorerUrl: 'https://polygonscan.com', rpcUrl: 'https://polygon-rpc.com' },
             { chainId: 8453, name: 'Base', currency: 'ETH', explorerUrl: 'https://basescan.org', rpcUrl: 'https://mainnet.base.org' },
-            { chainId: 42161, name: 'Arbitrum', currency: 'ETH', explorerUrl: 'https://arbiscan.io', rpcUrl: 'https://arb1.arbitrum.io/rpc' }
+            { chainId: 42161, name: 'Arbitrum', currency: 'ETH', explorerUrl: 'https://arbiscan.io', rpcUrl: 'https://arb1.arbitrum.io/rpc' },
+            
+            // --- ADD THESE TWO LINES ---
+            { chainId: 286623, name: 'SoDEX Mainnet', currency: 'SOSO', explorerUrl: 'https://main-scan.valuechain.xyz', rpcUrl: 'https://mainnet.valuechain.xyz' },
+            { chainId: 138565, name: 'SoDEX Testnet', currency: 'SOSO', explorerUrl: 'https://test-scan.valuechain.xyz', rpcUrl: 'https://testnet.valuechain.xyz' }
         ];
 
         const modal = createWeb3Modal({ ethersConfig: defaultConfig({ metadata }), chains, projectId });
@@ -200,8 +203,14 @@
                 statusBadge.innerText = "Wallet Connected";
                 statusBadge.className = "absolute top-4 right-4 bg-green-500/10 text-green-400 text-xs px-2 py-1 rounded-full border border-green-500/20 transition-colors duration-300";
                 
-                // Only enforce network switching for standard on-chain intents
-                if (['swap', 'invest', 'portfolio'].includes(txParams.intent) && chainId !== txParams.chainId) {
+                if (txParams.intent === 'sign_sodex' && chainId !== txParams.sodexChainId) {
+                    statusText.innerText = "Switching network to SoDEX...";
+                    try {
+                        await modal.switchNetwork(txParams.sodexChainId);
+                    } catch(e) {
+                        console.warn("Failed to switch network automatically to SoDEX", e);
+                    }
+                } else if (['swap', 'invest', 'portfolio'].includes(txParams.intent) && chainId !== txParams.chainId) {
                     statusText.innerText = `Switching network to ${txParams.chain}...`;
                     try {
                         await modal.switchNetwork(txParams.chainId);
