@@ -134,11 +134,14 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     "X-API-Sign": typed_sig,
                     "X-API-Nonce": str(nonce)
                 }
-                
-                params_only = json.loads(raw_payload)["params"]
-                
+
                 async with httpx.AsyncClient() as client:
-                    resp = await client.post(f"{SODEX_SPOT_API}/trade/orders/batch", json=params_only, headers=headers)
+                    resp = await client.post(
+                        f"{SODEX_SPOT_API}/trade/orders/batch", 
+                        content=raw_payload, 
+                        headers=headers
+                    )
+                    
                     resp_data = resp.json()
                     
                     if resp.status_code == 200 and resp_data.get("data", [{}])[0].get("code") == 0:
@@ -185,7 +188,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
     return {"status": "ok"}
 
-
 @app.post("/run-analysis")
 async def run_analysis(db: AsyncSession = Depends(get_db)):
     try:
@@ -204,7 +206,6 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
             active_chat_ids = [row[0] for row in result.all()]
 
             for signal in signals:
-                # NEW: Log to ValueChainAnalytics
                 db.add(ValueChainAnalytics(
                     asset=signal["asset"],
                     sentiment=signal["action"],
@@ -236,14 +237,11 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         if state_data.get("code") != 0 or not state_data.get("data"):
             raise ValueError(f"Wallet address {address[:6]} not recognized. Have you initialized your SoDEX account?")
         
-        # Cast the string ID to an integer
         sodex_account_id = int(state_data["data"]["aid"])
         
-        # --- NEW: Catch uninitialized (zero) accounts ---
         if sodex_account_id == 0:
             raise ValueError(f"Wallet `{address[:6]}...` is not initialized on SoDEX. Please connect to the SoDEX dApp and deposit funds to activate your trading account first. \n\n 👉 https://sodex.com/")
 
-        # 2. Fetch Dynamic Symbol ID via Direct Query
         symbols_resp = await client.get(
             f"{SODEX_SPOT_API}/markets/symbols",
             params={"symbol": target_symbol_name}
@@ -273,27 +271,27 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         if not symbol_id:
             raise ValueError(f"Failed to locate the ID for '{clean_asset}' on SoDEX.")
 
-    # 3. Prepare the Order Structure
-    # --- FIX: Reverted to strict matching (symbolID, clOrdID) per SoDEX API docs ---
     order_item = {
         "symbolID": symbol_id,             
         "clOrdID": str(uuid.uuid4())[:36], 
         "side": 1 if action == "BUY" else 2,
-        "type": 2,        # 2 = MARKET
-        "timeInForce": 3, # 3 = IOC
+        "type": 2,        
+        "timeInForce": 3, 
     }
     
     if action == "BUY":
-        order_item["funds"] = str(amount_usd)
+        order_item["funds"] = f"{amount_usd:g}"
     else:
-        order_item["quantity"] = "1.0"
+        order_item["quantity"] = "1"
 
     payload = {
         "type": "newOrder",
         "params": {
-            "accountID": sodex_account_id, # Must be integer!
+            "accountID": sodex_account_id,
             "orders": [order_item]
-        }
+        },
+        "accountID": sodex_account_id,
+        "orders": [order_item]
     }
     
     compact_json = json.dumps(payload, separators=(',', ':'))
@@ -305,8 +303,6 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         "payload_hash": payload_hash,
         "nonce": nonce
     }
-
-# --- Telegram Utility Functions ---
 
 async def send_direct_message(chat_id: int, text: str, reply_markup: dict = None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
