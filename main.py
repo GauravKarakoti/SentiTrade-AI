@@ -170,11 +170,11 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             if not user:
                 db.add(User(chat_id=chat_id, is_active=True))
                 await db.commit()
-                await send_direct_message(chat_id, "Welcome to the SoSoValue Ecosystem! SentiTrade-AI will now route actionable intelligence to you.")
+                await send_direct_message(chat_id, "Welcome to the SoSoValue Ecosystem! SentiTrade-AI will now route actionable intelligence to you. Use /subscribe to unlock premium SoDEX routing alerts.")
             else:
                 user.is_active = True
                 await db.commit()
-                await send_direct_message(chat_id, "Agentic alerts reactivated.")
+                await send_direct_message(chat_id, "Agentic alerts reactivated. Use /subscribe to unlock premium SoDEX routing alerts.")
         elif text == "/stop":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
@@ -182,6 +182,14 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.is_active = False
                 await db.commit()
                 await send_direct_message(chat_id, "Agent offline. You have opted out of the ValueChain stream.")
+        elif text == "/subscribe":
+            result = await db.execute(select(User).filter(User.chat_id == chat_id))
+            user = result.scalar_one_or_none()
+            if user:
+                # TODO: In Wave 3, we'd add actual payment subscriptions
+                user.is_subscribed = True 
+                await db.commit()
+                await send_direct_message(chat_id, "🎉 **Subscription Activated!** You will now receive agentic SoDEX trade signals.")
         else:
             reply_text = generate_chat_reply(text)
             await send_direct_message(chat_id, reply_text)
@@ -202,10 +210,19 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
         signals = generate_signals(analyses)
 
         if signals:
-            result = await db.execute(select(User.chat_id).filter(User.is_active == True))
-            active_chat_ids = [row[0] for row in result.all()]
+            # Fetch ALL active users, grabbing both chat_id and subscription status
+            result = await db.execute(
+                select(User.chat_id, User.is_subscribed).filter(
+                    User.is_active == True
+                )
+            )
+            active_users = result.all()
+            
+            # Split users into premium and free tiers
+            premium_chat_ids = [row[0] for row in active_users if row[1]]
+            free_chat_ids = [row[0] for row in active_users if not row[1]]
 
-            for signal in signals:
+            for index, signal in enumerate(signals):
                 db.add(ValueChainAnalytics(
                     asset=signal["asset"],
                     sentiment=signal["action"],
@@ -213,8 +230,21 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
                     rationale=signal["rationale"]
                 ))
 
-                for chat_id in active_chat_ids:
+                # Target audience: Premium gets all signals, Free gets only the first signal (index 0)
+                target_chat_ids = premium_chat_ids.copy()
+                if index == 0:
+                    target_chat_ids.extend(free_chat_ids)
+
+                # Route to the determined audience
+                for chat_id in target_chat_ids:
                     await send_telegram_alert(chat_id, signal)
+
+            # Optional Upsell: Notify free users about the signals they missed
+            if len(signals) > 1:
+                missed_count = len(signals) - 1
+                upsell_msg = f"🔒 **{missed_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream and premium SoDEX routing alerts."
+                for chat_id in free_chat_ids:
+                    await send_direct_message(chat_id, upsell_msg)
         
         await db.commit()
         return {"status": "success", "agentic_actions_routed": len(signals)}

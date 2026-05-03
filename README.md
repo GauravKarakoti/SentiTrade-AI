@@ -13,10 +13,13 @@ At the heart of SentiTrade-AI lies the **ValueChain**—a seamless ecosystem whe
 - **ValueChain Integration:** Real-time, transparent data flow handling, unlocking deeper insights in the digital economy.
 - **SoDEX Routing:** Executes trades on the SoDEX orderbook, pushing boundaries by blending decentralized execution with intelligent AI routing.
 - **One-Person Empowerment:** A Web Dashboard and Telegram Bot providing institutional-level research and autonomous execution for individual operators.
+- **Premium Signal Subscriptions:** Monetized access to high-confidence trade signals, gated via monthly subscription logic, allowing creators to generate recurring revenue.
 
-## 🎯 Target Users
+## 🎯 Target Users & Business Model
 
-Solo crypto traders, small funds, and DeFi enthusiasts who want institutional-level research and execution without a full operations team.
+Solo crypto traders, small funds, and DeFi enthusiasts. 
+
+**Monetization:** Operates as a SaaS via Telegram, charging users a monthly subscription fee (in crypto or fiat) to access real-time AI signal alerts and 1-click SoDEX routing.
 
 ## 🔁 Core Agentic Workflow 
 
