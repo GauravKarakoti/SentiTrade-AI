@@ -52,16 +52,15 @@ def build_prompt(news_batch: list[dict]) -> str:
     articles = []
     for n in news_batch[:10]:
         matched = n.get("matched_currencies")
-        asset = matched[0].get("name", "N/A") if matched and isinstance(matched, list) else "N/A"
+        asset = matched[0].get("symbol", matched[0].get("name", "N/A")) if matched and isinstance(matched, list) else "N/A"
         content = n.get("content", "No Content")
         articles.append(f"- {n.get('title', 'No Title')} (Asset: {asset}) | Content: {content}")
 
-    # UPDATED: Agentic system identity
     return f"""
 You are an autonomous SoSoValue Agentic System operating on the ValueChain.
 Analyze the following financial data to provide actionable intelligence for the One-Person economy.
 For each article, output a JSON object with:
-- "asset": The specific cryptocurrency ticker symbol with a '$' prefix (e.g., "$HYPE").
+- "asset": The standard trading ticker symbol with a '$' prefix (e.g., "$TON", "$BTC"). Do NOT use the full token name.
 - "sentiment": one of "bullish", "bearish", "neutral"
 - "confidence": integer between 0 and 100
 - "narrative_tags": array of relevant tags (e.g., "AI x Web3", "SoDEX Liquidity")
