@@ -124,7 +124,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 raw_payload = web_app_payload.get("payload")
                 user_address = web_app_payload.get("address")
                 
-                # 1. Enforce EIP-712 signature prefix (must start with 0x01)
+                # FIX: Extract the exact nonce that was used during the signing process
+                original_nonce = str(web_app_payload.get("nonce"))
+                
                 if signature.startswith("0x01"):
                     typed_sig = signature
                 elif signature.startswith("0x"):
@@ -132,18 +134,15 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 else:
                     typed_sig = "0x01" + signature
                 
-                # 2. Generate a fresh nonce (timestamp in ms) for the request
-                fresh_nonce = str(int(time.time() * 1000))
-                
                 headers = {
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                     "X-API-Key": user_address,
                     "X-API-Sign": typed_sig,
-                    "X-API-Nonce": fresh_nonce
+                    "X-API-Nonce": original_nonce
                 }
 
-                # FIXED: Extract the 'params' object to use as the HTTP request body
+                # Extract the 'params' object to use as the HTTP request body
                 parsed_payload = json.loads(raw_payload)
                 request_body = json.dumps(parsed_payload["params"], separators=(',', ':'))
 
