@@ -120,19 +120,27 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     await send_direct_message(chat_id, f"❌ **ValueChain Error:** {str(e)}")
 
             elif status == "sodex_signed":
-                signature = web_app_payload.get("signature")
+                signature = web_app_payload.get("signature", "")
                 raw_payload = web_app_payload.get("payload")
-                nonce = web_app_payload.get("nonce")
                 user_address = web_app_payload.get("address")
                 
-                typed_sig = "0x01" + signature[2:]
+                # 1. Enforce EIP-712 signature prefix (must start with 0x01)
+                if signature.startswith("0x01"):
+                    typed_sig = signature
+                elif signature.startswith("0x"):
+                    typed_sig = "0x01" + signature[2:]
+                else:
+                    typed_sig = "0x01" + signature
+                
+                # 2. Generate a fresh nonce (timestamp in ms) for the request
+                fresh_nonce = str(int(time.time() * 1000))
                 
                 headers = {
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                     "X-API-Key": user_address,
                     "X-API-Sign": typed_sig,
-                    "X-API-Nonce": str(nonce)
+                    "X-API-Nonce": fresh_nonce
                 }
 
                 async with httpx.AsyncClient() as client:
@@ -309,8 +317,10 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         "timeInForce": 3, 
     }
     
+    # 4. Enforce decimals as strings for quantities/funds
     if action == "BUY":
-        order_item["funds"] = f"{amount_usd:g}"
+        # Format decimal cleanly and enforce string type
+        order_item["funds"] = f"{float(amount_usd):.2f}".rstrip('0').rstrip('.') 
     else:
         order_item["quantity"] = "1"
 
@@ -324,9 +334,12 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         "orders": [order_item]
     }
     
+    # 5. Compact JSON with no spaces (separators logic removes spaces after : and ,)
     compact_json = json.dumps(payload, separators=(',', ':'))
     payload_hash = "0x" + keccak(text=compact_json).hex()
-    nonce = int(time.time() * 1000)
+    
+    # This nonce is for the signing generation context, the request header nonce is fresh above
+    nonce = int(time.time() * 1000) 
     
     return {
         "compact_json": compact_json,
