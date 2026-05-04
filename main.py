@@ -143,10 +143,14 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     "X-API-Nonce": fresh_nonce
                 }
 
+                # FIXED: Extract the 'params' object to use as the HTTP request body
+                parsed_payload = json.loads(raw_payload)
+                request_body = json.dumps(parsed_payload["params"], separators=(',', ':'))
+
                 async with httpx.AsyncClient() as client:
                     resp = await client.post(
                         f"{SODEX_SPOT_API}/trade/orders/batch", 
-                        content=raw_payload, 
+                        content=request_body, 
                         headers=headers
                     )
                     
@@ -317,21 +321,19 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         "timeInForce": 3, 
     }
     
-    # 4. Enforce decimals as strings for quantities/funds
     if action == "BUY":
         # Format decimal cleanly and enforce string type
         order_item["funds"] = f"{float(amount_usd):.2f}".rstrip('0').rstrip('.') 
     else:
         order_item["quantity"] = "1"
 
+    # FIXED: Use batchNewOrder and restrict root keys to type and params
     payload = {
-        "type": "newOrder",
+        "type": "batchNewOrder",
         "params": {
             "accountID": sodex_account_id,
             "orders": [order_item]
-        },
-        "accountID": sodex_account_id,
-        "orders": [order_item]
+        }
     }
     
     # 5. Compact JSON with no spaces (separators logic removes spaces after : and ,)
