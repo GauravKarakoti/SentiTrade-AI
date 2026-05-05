@@ -122,11 +122,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             elif status == "sodex_signed":
                 signature = web_app_payload.get("signature", "")
                 raw_payload = web_app_payload.get("payload")
-                user_address = web_app_payload.get("address")
                 
-                # FIX: Extract the exact nonce that was used during the signing process
                 original_nonce = str(web_app_payload.get("nonce"))
-                
+
                 if signature.startswith("0x01"):
                     typed_sig = signature
                 elif signature.startswith("0x"):
@@ -137,12 +135,11 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 headers = {
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                    "X-API-Key": user_address,
-                    "X-API-Sign": typed_sig,
+                    "X-API-Sign": typed_sig,  
                     "X-API-Nonce": original_nonce
                 }
 
-                # Extract the 'params' object to use as the HTTP request body
+                # RESTORE the param extraction! 
                 parsed_payload = json.loads(raw_payload)
                 request_body = json.dumps(parsed_payload["params"], separators=(',', ':'))
 
@@ -326,7 +323,6 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
     else:
         order_item["quantity"] = "1"
 
-    # FIXED: Use batchNewOrder and restrict root keys to type and params
     payload = {
         "type": "batchNewOrder",
         "params": {
@@ -335,11 +331,11 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         }
     }
     
-    # 5. Compact JSON with no spaces (separators logic removes spaces after : and ,)
+    # 5. Compact JSON with no spaces
     compact_json = json.dumps(payload, separators=(',', ':'))
     payload_hash = "0x" + keccak(text=compact_json).hex()
     
-    # This nonce is for the signing generation context, the request header nonce is fresh above
+    # This nonce is for the signing generation context
     nonce = int(time.time() * 1000) 
     
     return {
