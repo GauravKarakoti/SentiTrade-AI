@@ -135,6 +135,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 headers = {
                     "Content-Type": "application/json",
                     "Accept": "application/json",
+                    "X-API-Key": user_address,  
                     "X-API-Sign": typed_sig,  
                     "X-API-Nonce": original_nonce
                 }
