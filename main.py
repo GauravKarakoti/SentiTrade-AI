@@ -122,6 +122,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             elif status == "sodex_signed":
                 signature = web_app_payload.get("signature", "")
                 raw_payload = web_app_payload.get("payload")
+                user_address = web_app_payload.get("address")
                 
                 original_nonce = str(web_app_payload.get("nonce"))
 
