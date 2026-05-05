@@ -11,4 +11,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping the bot's health check endpoint
-        run: curl -s --max-time 30 "https://swapsmith-5e8y.onrender.com" > /dev/null || true
+        run: curl -X POST -s --max-time 30 "https://sentitrade-ai.onrender.com/run-analysis" > /dev/null || true
