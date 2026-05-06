@@ -10,5 +10,5 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping the bot's health check endpoint
+      - name: Ping the bot's run analysis endpoint
         run: curl -X POST -s --max-time 30 "https://sentitrade-ai.onrender.com/run-analysis" > /dev/null || true
