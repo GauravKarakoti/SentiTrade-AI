@@ -28,6 +28,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
+    """Calculates performance stats for a specific asset from logged analytics."""
+    result = await db.execute(
+        select(ValueChainAnalytics)
+        .filter(ValueChainAnalytics.asset == asset)
+        .filter(ValueChainAnalytics.signal_accuracy != None)
+    )
+    records = result.scalars().all()
+    
+    if not records:
+        return {"winRate": "N/A", "avgPnl": "0.0%", "maxDrawdown": "0.0%"}
+    
+    total = len(records)
+    wins = len([r for r in records if r.signal_accuracy is True])
+    total_pnl = sum([r.pnl_percentage or 0 for r in records])
+    
+    return {
+        "winRate": f"{int((wins / total) * 100)}%",
+        "avgPnl": f"{'+' if (total_pnl / total) >= 0 else ''}{(total_pnl / total):.2f}%",
+        "maxDrawdown": f"{min([r.pnl_percentage or 0 for r in records]):.2f}%"
+    }
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     try:
@@ -49,30 +71,37 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         elif data.startswith("approve_"):
             parts = data.split("_")
             asset = parts[1]
+            # Ensure asset has the '$' prefix for consistency
+            formatted_asset = f"${asset}"
             action = parts[2] if len(parts) > 2 else "BUY"
             confidence = parts[3] if len(parts) > 3 else "80"
             
             await answer_callback_query(callback_id, "Initializing Routing...")
             
-            # Fetch historical stats from DB (Mocked here for demonstration)
-            historical_win_rate = "68%" 
-            avg_pnl = "+2.4%"
-            max_drawdown = "-8.1%"
+            # Fetch REAL performance stats
+            stats = await get_historical_performance(db, formatted_asset)
 
             query_params = urllib.parse.urlencode({
                 "intent": "connect",
-                "asset": asset,
+                "asset": formatted_asset,
                 "action": action,
                 "confidence": confidence,
-                "winRate": historical_win_rate,
-                "avgPnl": avg_pnl,
-                "maxDrawdown": max_drawdown
+                "winRate": stats["winRate"],
+                "avgPnl": stats["avgPnl"],
+                "maxDrawdown": stats["maxDrawdown"]
             })
             
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             
             keyboard = {"keyboard": [[{"text": "🔗 Connect Wallet", "web_app": {"url": web_app_url}}]], "resize_keyboard": True, "one_time_keyboard": True}
-            await send_direct_message(chat_id, f"⚡ **Agentic Execution: {asset}**\nReview historical metrics and authorize.", reply_markup=keyboard)
+            await send_direct_message(
+                chat_id, 
+                f"⚡ **Agentic Execution: {formatted_asset}**\n\n"
+                f"Win Rate: {stats['winRate']}\n"
+                f"Avg PnL: {stats['avgPnl']}\n\n"
+                f"Review metrics and authorize to continue.", 
+                reply_markup=keyboard
+            )
         return {"status": "ok"}
 
     if "message" in update and "web_app_data" in update["message"]:
