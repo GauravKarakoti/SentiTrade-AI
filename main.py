@@ -14,7 +14,7 @@ from db import init_db, get_db, User, ValueChainAnalytics
 from bot_logic import (
     fetch_news_from_api, deduplicate, build_prompt, 
     analyze_with_llm, generate_signals, send_telegram_alert,
-    generate_chat_reply
+    generate_chat_reply, fetch_asset_volatility
 )
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -200,6 +200,20 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.is_subscribed = True 
                 await db.commit()
                 await send_direct_message(chat_id, "🎉 **Subscription Activated!** You will now receive agentic SoDEX trade signals.")
+        elif text.startswith("/volatility"):
+            result = await db.execute(select(User).filter(User.chat_id == chat_id))
+            user = result.scalar_one_or_none()
+            if user:
+                try:
+                    new_threshold = int(text.split(" ")[1])
+                    user.volatility_guard_threshold = new_threshold
+                    await db.commit()
+                    await send_direct_message(
+                        chat_id, 
+                        f"🛡️ **Volatility Guard Updated**\nYour threshold is now set to **{new_threshold}%**.\n\nSignals for assets experiencing volatility above this limit will be automatically filtered out."
+                    )
+                except (IndexError, ValueError):
+                    await send_direct_message(chat_id, "⚠️ **Usage:** `/volatility <percentage>` (e.g., `/volatility 15`)")
         else:
             reply_text = generate_chat_reply(text)
             await send_direct_message(chat_id, reply_text)
@@ -220,17 +234,17 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
         signals = generate_signals(analyses)
 
         if signals:
-            # Fetch ALL active users, grabbing both chat_id and subscription status
+            # Fetch ALL active users, now grabbing the volatility_guard_threshold too
             result = await db.execute(
-                select(User.chat_id, User.is_subscribed).filter(
+                select(User.chat_id, User.is_subscribed, User.volatility_guard_threshold).filter(
                     User.is_active == True
                 )
             )
             active_users = result.all()
             
-            # Split users into premium and free tiers
-            premium_chat_ids = [row[0] for row in active_users if row[1]]
-            free_chat_ids = [row[0] for row in active_users if not row[1]]
+            # Split users into premium and free tiers mapping their thresholds
+            premium_users = [{"chat_id": row[0], "vol_guard": row[2]} for row in active_users if row[1]]
+            free_users = [{"chat_id": row[0], "vol_guard": row[2]} for row in active_users if not row[1]]
 
             for index, signal in enumerate(signals):
                 db.add(ValueChainAnalytics(
@@ -239,21 +253,27 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
                     confidence=signal["confidence"],
                     rationale=signal["rationale"]
                 ))
+                
+                current_asset_volatility = await fetch_asset_volatility(signal["asset"])
+                
+                # NEW: Attach volatility to the signal dictionary so the alert function can use it
+                signal["volatility"] = current_asset_volatility
 
-                # Target audience: Premium gets all signals, Free gets only the first signal (index 0)
-                target_chat_ids = premium_chat_ids.copy()
+                # Target audience
+                target_users = premium_users.copy()
                 if index == 0:
-                    target_chat_ids.extend(free_chat_ids)
+                    target_users.extend(free_users)
 
-                # Route to the determined audience
-                for chat_id in target_chat_ids:
-                    await send_telegram_alert(chat_id, signal)
+                # Route to the determined audience while respecting their personal Volatility Guard
+                for user in target_users:
+                    if current_asset_volatility <= user["vol_guard"]:
+                        await send_telegram_alert(user["chat_id"], signal)
 
             # Optional Upsell: Notify free users about the signals they missed
             if len(signals) > 1:
                 missed_count = len(signals) - 1
                 upsell_msg = f"🔒 **{missed_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream and premium SoDEX routing alerts."
-                for chat_id in free_chat_ids:
+                for chat_id in free_users:
                     await send_direct_message(chat_id, upsell_msg)
         
         await db.commit()

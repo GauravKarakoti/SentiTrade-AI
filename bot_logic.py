@@ -34,6 +34,63 @@ async def fetch_news_from_api() -> list[dict]:
         
     return data.get("list", []) if isinstance(data, dict) else []
 
+async def fetch_currency_id(asset: str) -> str:
+    """Fetches the SoSoValue currency_id for a given asset symbol."""
+    if not SOSOVALUE_API_KEY:
+        return ""
+
+    clean_asset = asset.replace("$", "").upper()
+    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
+    url = f"{SOSOVALUE_BASE_URL}/v1/currencies"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            
+            response_data = resp.json()
+            # Handle potential 'data' wrapper just in case the API uses it
+            currencies = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
+            
+            if isinstance(currencies, list):
+                for currency in currencies:
+                    if currency.get("symbol", "").upper() == clean_asset:
+                        return currency.get("currency_id", "")
+                        
+    except Exception as e:
+        print(f"Currency ID fetch error for {clean_asset}: {str(e)}")
+        
+    return ""
+
+async def fetch_asset_volatility(asset: str) -> float:
+    if not SOSOVALUE_API_KEY:
+        return 0.0
+    
+
+    clean_asset = asset.replace("$", "").upper()
+    cid = await fetch_currency_id(clean_asset)
+    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
+    url = f"{SOSOVALUE_BASE_URL}/v1/currencies/{cid}/market-snapshot"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            
+            response_data = resp.json()
+            
+            # Extract the payload, handling a potential top-level 'data' wrapper just in case
+            payload = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
+            
+            vol_value = payload.get("change_pct_24h", 0.0)
+            
+            # Return the absolute percentage to represent overall volatility magnitude
+            return abs(float(vol_value))
+                
+    except Exception as e:
+        print(f"Volatility fetch error for {clean_asset}: {str(e)}")
+        
+    return 0.0
+
 async def deduplicate(items: list[dict], db: AsyncSession) -> list[dict]:
     new_items = []
     result = await db.execute(select(NewsCache.news_id))
@@ -50,11 +107,20 @@ async def deduplicate(items: list[dict], db: AsyncSession) -> list[dict]:
 
 def build_prompt(news_batch: list[dict]) -> str:
     articles = []
-    for n in news_batch[:10]:
+    for n in news_batch:
         matched = n.get("matched_currencies")
         asset = matched[0].get("symbol", matched[0].get("name", "N/A")) if matched and isinstance(matched, list) else "N/A"
+        
+        # Skip the news item if no valid asset is found
+        if asset == "N/A":
+            continue
+            
         content = n.get("content", "No Content")
         articles.append(f"- {n.get('title', 'No Title')} (Asset: {asset}) | Content: {content}")
+        
+        # Stop once we have 10 valid actionable articles
+        if len(articles) >= 10:
+            break
 
     return f"""
 You are an autonomous SoSoValue Agentic System operating on the ValueChain.
@@ -155,10 +221,13 @@ async def send_telegram_alert(chat_id: int, signal: dict):
         ]
     }
     
-    # UPDATED: Terminology reflects the new ecosystem
+    # Format the volatility to 2 decimal places, defaulting to 0.0 if not present
+    volatility_formatted = f"{signal.get('volatility', 0.0):.2f}%"
+    
+    # UPDATED: Added the 24h Volatility line to the text output
     payload = {
         "chat_id": chat_id,
-        "text": f"🌐 **ValueChain Intelligence**\n🤖 Action: {signal['action']} {signal['asset']}\nConfidence: {signal['confidence']}%\nRationale: {signal['rationale']}",
+        "text": f"🌐 **ValueChain Intelligence**\n🤖 Action: {signal['action']} {signal['asset']}\n📈 24h Volatility: {volatility_formatted}\nConfidence: {signal['confidence']}%\nRationale: {signal['rationale']}",
         "parse_mode": "Markdown",
         "reply_markup": json.dumps(keyboard)
     }

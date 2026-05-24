@@ -69,8 +69,11 @@ SODEX_SPOT_API=[https://mainnet-gw.sodex.dev/api/v1/spot](https://mainnet-gw.sod
 ### 3. Run the Ecosystem
 ```bash
 uvicorn main:app --host 0.0000 --port 8000 --reload
+
+ngrok http 8000
 ```
-This starts the API server, background worker, Redis, and PostgreSQL.
+- This starts the API server, background worker, Redis, and PostgreSQL.
+- Set up your webhook at `https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=<NGROK_URL>/webhook`
 
 ### 4. Access the dashboard
 Interact with the agent via Telegram at `t.me/SentiTradeAIBot`.

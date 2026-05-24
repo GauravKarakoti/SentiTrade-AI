@@ -22,6 +22,7 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     is_subscribed = Column(Boolean, default=False) 
     subscription_end = Column(DateTime, nullable=True)
+    volatility_guard_threshold = Column(Integer, default=15)
 
 class NewsCache(Base):
     __tablename__ = "news_cache"
