@@ -3,97 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SentiTrade | Powered by SoSoValue</title>
+    <title>SentiTrade | Agentic Execution</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
-        body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; }
-        /* Updated gradient to reflect a more Web3/AI thematic feel */
-        .gradient-text { background: linear-gradient(to right, #00f2fe, #4facfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .glass-panel { background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(0, 242, 254, 0.2); }
-        .btn-primary { background: linear-gradient(135deg, #00f2fe, #4facfe); transition: all 0.2s; color: #0f172a;}
+        body { background-color: #0b0f19; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .gradient-text { background: linear-gradient(135deg, #00f2fe, #4facfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .glass-panel { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(16px); border: 1px solid rgba(0, 242, 254, 0.15); box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5); }
+        .ai-card { background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); border-left: 4px solid #4facfe; }
+        .btn-primary { background: linear-gradient(135deg, #00f2fe, #4facfe); transition: all 0.3s ease; color: #0f172a; box-shadow: 0 0 15px rgba(0, 242, 254, 0.4); }
+        .btn-primary:hover { box-shadow: 0 0 25px rgba(0, 242, 254, 0.6); transform: translateY(-1px); }
         .btn-primary:active { transform: scale(0.98); }
-        .loader { border: 3px solid #333; border-top: 3px solid #00f2fe; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+        .loader { border: 3px solid rgba(15, 23, 42, 0.3); border-top: 3px solid #0f172a; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .fade-in { animation: fadeIn 0.3s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.4s ease-out forwards; opacity: 0; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Chart Container Styling */
+        #tvchart { width: 100%; height: 180px; border-radius: 8px; overflow: hidden; margin-top: 1rem; border: 1px solid rgba(255,255,255,0.05); }
     </style>
 </head>
-<body class="flex flex-col items-center justify-center min-h-screen p-4">
+<body class="flex flex-col items-center min-h-screen p-4 pb-10">
 
-    <div class="mb-8 text-center fade-in">
-        <h1 class="text-3xl font-bold tracking-tight">Senti<span class="gradient-text">Trade</span></h1>
-        <p class="text-slate-400 text-sm mt-1">Agentic Signer • SoSoValue Ecosystem</p>
+    <div class="mt-4 mb-6 text-center fade-in" style="animation-delay: 0.1s;">
+        <h1 class="text-2xl font-extrabold tracking-tight">Senti<span class="gradient-text">Trade</span> AI</h1>
+        <p class="text-slate-400 text-xs mt-1 font-mono uppercase tracking-widest">SoDEX Agentic Execution</p>
     </div>
 
-    <div class="glass-panel w-full max-w-md rounded-2xl p-6 shadow-2xl relative overflow-hidden fade-in">
+    <div class="glass-panel w-full max-w-md rounded-2xl p-5 relative overflow-hidden fade-in" style="animation-delay: 0.2s;">
         
-        <div id="statusBadge" class="absolute top-4 right-4 bg-yellow-500/10 text-yellow-500 text-xs px-2 py-1 rounded-full border border-yellow-500/20 transition-colors duration-300">
+        <div id="statusBadge" class="absolute top-4 right-4 bg-yellow-500/10 text-yellow-500 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-yellow-500/20">
             Pending Action
         </div>
 
-        <div class="mt-4 space-y-6">
-            
-            <div class="text-center">
-                <p class="text-slate-400 text-xs uppercase tracking-wider mb-1" id="actionLabel">Agent Routing</p>
-                <div class="flex items-center justify-center space-x-2">
-                    <span class="text-4xl font-bold text-white" id="amountDisplay">0.00</span>
-                    <span class="text-xl text-slate-400" id="tokenDisplay">ETH</span>
-                </div>
-                <div class="flex items-center justify-center mt-2 space-x-2 text-sm text-slate-400">
-                    <span id="chainIcon">🌐</span>
-                    <span id="chainDisplay">ValueChain</span>
+        <div class="mt-2 space-y-5">
+            <div>
+                <p class="text-slate-400 text-xs uppercase tracking-wider mb-1" id="actionLabel">Intent</p>
+                <div class="flex items-baseline space-x-2">
+                    <span class="text-3xl font-bold text-white" id="amountDisplay">Authorize</span>
+                    <span class="text-lg text-slate-300 font-medium" id="tokenDisplay">Trade</span>
                 </div>
             </div>
 
-            <div class="h-px bg-slate-700 w-full"></div>
+            <div id="tvchart" class="bg-slate-900 hidden"></div>
 
-            <div class="flex justify-between items-center text-sm">
-                <span class="text-slate-400">Destination</span>
-                <div class="flex items-center space-x-1">
-                    <span class="font-mono text-slate-200 bg-slate-800 px-2 py-1 rounded border border-slate-700" id="toDisplay">0x...</span>
+            <div id="aiIntelligenceCard" class="ai-card rounded-lg p-3 hidden">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-xs text-slate-300 font-semibold flex items-center gap-1">
+                        🤖 AI Signal Strength
+                    </span>
+                    <span id="confidenceValue" class="text-xs font-bold text-cyan-400">80%</span>
                 </div>
+                <div class="w-full bg-slate-800 rounded-full h-1.5 mb-3">
+                    <div id="confidenceBar" class="bg-gradient-to-r from-cyan-500 to-blue-500 h-1.5 rounded-full" style="width: 80%"></div>
+                </div>
+                <p id="rationaleText" class="text-[11px] text-slate-400 leading-relaxed italic">
+                    "AI Analysis rationale will appear here."
+                </p>
             </div>
 
-            <div class="flex justify-between items-center text-sm" id="networkFeeRow">
-                <span class="text-slate-400">Est. Network Fee</span>
-                <span class="text-slate-200">~ $0.00</span>
+            <div class="h-px bg-slate-800 w-full"></div>
+
+            <div class="space-y-2">
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-slate-500">Target Protocol</span>
+                    <span class="text-slate-300 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-blue-500"></span> SoDEX Spot</span>
+                </div>
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-slate-500">Network</span>
+                    <span class="text-slate-300">ValueChain</span>
+                </div>
+                <div class="flex justify-between items-center text-xs" id="networkFeeRow">
+                    <span class="text-slate-500">Est. Network Fee</span>
+                    <span class="text-emerald-400">Gasless (Off-chain Sign)</span>
+                </div>
             </div>
         </div>
 
-        <div class="mt-8 space-y-3">
-            <button id="btnAction" class="btn-primary w-full py-4 rounded-xl font-bold text-lg shadow-lg flex justify-center items-center space-x-2 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
-                <span>Connect to ValueChain</span>
+        <div class="mt-6 space-y-3">
+            <button id="btnAction" class="btn-primary w-full py-3.5 rounded-xl font-bold text-sm flex justify-center items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none">
+                <span>Connect Wallet</span>
             </button>
             
-            <button id="btnDisconnect" class="w-full py-3 text-slate-400 text-sm hover:text-white transition hidden">
-                Disconnect Wallet
+            <button id="btnDisconnect" class="w-full py-2 text-slate-500 text-xs hover:text-slate-300 transition hidden">
+                Disconnect
             </button>
         </div>
 
-        <p id="statusText" class="mt-4 text-center text-xs text-slate-500 h-4 transition-all duration-300"></p>
+        <p id="statusText" class="mt-3 text-center text-xs text-slate-400 h-4"></p>
     </div>
-
-    <p class="mt-6 text-xs text-slate-500 max-w-xs text-center fade-in">
-        <span class="mr-1">🤖</span> AI x Web3 execution via <span class="text-slate-300">SoDEX</span>. Your private keys remain on your device.
-    </p>
 
     <script type="module">
         import { createWeb3Modal, defaultConfig } from 'https://esm.sh/@web3modal/ethers@5.1.11';
-        import { BrowserProvider, formatEther, parseUnits } from 'https://esm.sh/ethers@6.13.1';
+        import { BrowserProvider } from 'https://esm.sh/ethers@6.13.1';
 
-        // --- CONFIG ---
-        const projectId = 'cfd6d68649717d2118148c25c6fb5aec';
+        const projectId = 'cfd6d68649717d2118148c25c6fb5aec'; // Keep your original project ID
         const metadata = { name: 'SentiTrade', description: 'DeFi Signer', url: window.location.origin, icons: [] };
         
         const chains = [
-            { chainId: 1, name: 'Ethereum', currency: 'ETH', explorerUrl: 'https://etherscan.io', rpcUrl: 'https://cloudflare-eth.com' },
-            { chainId: 56, name: 'BNB Chain', currency: 'BNB', explorerUrl: 'https://bscscan.com', rpcUrl: 'https://binance.ulam.io' },
-            { chainId: 137, name: 'Polygon', currency: 'MATIC', explorerUrl: 'https://polygonscan.com', rpcUrl: 'https://polygon-rpc.com' },
-            { chainId: 8453, name: 'Base', currency: 'ETH', explorerUrl: 'https://basescan.org', rpcUrl: 'https://mainnet.base.org' },
-            { chainId: 42161, name: 'Arbitrum', currency: 'ETH', explorerUrl: 'https://arbiscan.io', rpcUrl: 'https://arb1.arbitrum.io/rpc' },
-            
-            // --- ADD THESE TWO LINES ---
             { chainId: 286623, name: 'SoDEX Mainnet', currency: 'SOSO', explorerUrl: 'https://main-scan.valuechain.xyz', rpcUrl: 'https://mainnet.valuechain.xyz' },
             { chainId: 138565, name: 'SoDEX Testnet', currency: 'SOSO', explorerUrl: 'https://test-scan.valuechain.xyz', rpcUrl: 'https://testnet.valuechain.xyz' }
         ];
@@ -104,192 +112,133 @@
 
         const urlParams = new URLSearchParams(window.location.search);
         const txParams = {
-            intent: urlParams.get('intent') || 'swap',
+            intent: urlParams.get('intent') || 'connect',
             hash: urlParams.get('hash'),
             nonce: urlParams.get('nonce'),
             payload: urlParams.get('payload'),
             address: urlParams.get('address'),
-            asset: urlParams.get('asset'),
-            to: urlParams.get('to'),
-            value: urlParams.get('value') || '0x0',
-            data: urlParams.get('data') || '0x',
-            chainId: parseInt(urlParams.get('chainId') || '1'),
-            token: urlParams.get('token') || 'ETH',
-            chain: urlParams.get('chain') || 'Ethereum',
-            amount: urlParams.get('amount'),
-            // ADD THIS LINE:
+            asset: urlParams.get('asset') || 'Unknown',
+            action: urlParams.get('action') || 'BUY',
+            confidence: urlParams.get('confidence') || '0',
             sodexChainId: parseInt(urlParams.get('sodexChainId') || '286623', 10) 
         };
 
-        // --- UPDATE UI ---
-        const actionLabels = {
-            'swap': 'You are Swapping',
-            'invest': 'You are Investing',
-            'portfolio': 'Portfolio Allocation'
-        };
-        document.getElementById('actionLabel').innerText = actionLabels[txParams.intent] || 'You are Sending';
+        // UI Element Selectors
+        const elActionLabel = document.getElementById('actionLabel');
+        const elAmountDisplay = document.getElementById('amountDisplay');
+        const elTokenDisplay = document.getElementById('tokenDisplay');
+        const btnAction = document.getElementById('btnAction');
+        const aiCard = document.getElementById('aiIntelligenceCard');
 
-        try {
-            let displayAmt;
-            if (txParams.amount) {
-                displayAmt = txParams.amount;
-            } else {
-                displayAmt = txParams.value.startsWith('0x') ? formatEther(txParams.value) : txParams.value;
-            }
-
-            document.getElementById('amountDisplay').innerText = parseFloat(displayAmt).toFixed(4);
-            document.getElementById('tokenDisplay').innerText = txParams.token;
-            document.getElementById('chainDisplay').innerText = txParams.chain;
+        // Setup AI Explainability Card if data exists
+        if (txParams.asset !== 'Unknown') {
+            aiCard.style.display = 'block';
+            document.getElementById('tvchart').style.display = 'block';
+            document.getElementById('confidenceValue').innerText = `${txParams.confidence}%`;
+            document.getElementById('confidenceBar').style.width = `${txParams.confidence}%`;
+            document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
             
-            if (txParams.to) {
-                document.getElementById('toDisplay').innerText = `${txParams.to.slice(0, 6)}...${txParams.to.slice(-4)}`;
+            // Set action colors
+            if(txParams.action.toUpperCase() === 'SELL') {
+                document.getElementById('confidenceBar').classList.replace('from-cyan-500', 'from-red-500');
+                document.getElementById('confidenceBar').classList.replace('to-blue-500', 'to-orange-500');
+                document.getElementById('confidenceValue').classList.replace('text-cyan-400', 'text-red-400');
             }
-        } catch (e) {
-            console.error(e);
+
+            // Initialize Lightweight Chart (Simulating Real-Time Visuals)
+            initChart();
         }
 
-        // Contextual UI adjustments based on intent
+        function initChart() {
+            const chartOptions = { 
+                layout: { textColor: '#94a3b8', background: { type: 'solid', color: 'transparent' } },
+                grid: { vertLines: { color: 'rgba(255,255,255,0.02)' }, horzLines: { color: 'rgba(255,255,255,0.02)' } },
+                timeScale: { visible: false },
+                rightPriceScale: { borderVisible: false }
+            };
+            const chart = LightweightCharts.createChart(document.getElementById('tvchart'), chartOptions);
+            const lineSeries = chart.addLineSeries({ color: txParams.action.toUpperCase() === 'SELL' ? '#ef4444' : '#0ea5e9', lineWidth: 2 });
+            
+            // Simulate recent price action data to give the UI a "live" feel while connecting
+            const mockData = Array.from({length: 30}, (_, i) => ({
+                time: `2024-01-${(i+1).toString().padStart(2, '0')}`,
+                value: 100 + Math.random() * 20 + (txParams.action === 'BUY' ? i : -i) // Trend based on signal
+            }));
+            lineSeries.setData(mockData);
+            chart.timeScale().fitContent();
+        }
+
+        // Contextual UI adjustments
         if (txParams.intent === 'sign_sodex') {
-             document.getElementById('actionLabel').innerText = "Sign SoDEX Order";
-             document.getElementById('amountDisplay').innerText = "Authorize";
-             document.getElementById('tokenDisplay').innerText = "Trade";
-             document.getElementById('toDisplay').innerText = "SoDEX Exchange";
-             document.getElementById('btnAction').innerText = "Sign EIP-712";
-             document.getElementById('networkFeeRow').style.display = 'none'; // Off-chain signing has no fee
+             elActionLabel.innerText = "Authorize Execution";
+             elAmountDisplay.innerText = txParams.action;
+             elTokenDisplay.innerText = txParams.asset;
+             btnAction.innerText = "Sign & Execute";
         } else if (txParams.intent === 'connect') {
-             document.getElementById('actionLabel').innerText = "Connection Request";
-             document.getElementById('amountDisplay').innerText = "Link";
-             document.getElementById('tokenDisplay').innerText = "Wallet";
-             document.getElementById('toDisplay').innerText = "Provide Address";
-             document.getElementById('btnAction').innerText = "Connect to SentiTrade";
-        } else if (!txParams.to) {
-             // Fallback failure for malformed standard requests
-             document.getElementById('statusText').innerText = "Invalid transaction parameters";
-             document.getElementById('statusText').classList.add('text-red-400');
-             document.getElementById('btnAction').disabled = true;
-             document.getElementById('btnAction').classList.add('opacity-50', 'cursor-not-allowed');
+             elActionLabel.innerText = "Target Asset";
+             elAmountDisplay.innerText = "Connect";
+             elTokenDisplay.innerText = txParams.asset;
         }
 
-        const btn = document.getElementById('btnAction');
-        const btnDisconnect = document.getElementById('btnDisconnect');
-        const statusText = document.getElementById('statusText');
-        const statusBadge = document.getElementById('statusBadge');
         let walletProvider = null;
 
-        modal.subscribeProvider(async ({ provider, address, chainId }) => {
+        modal.subscribeProvider(async ({ provider, address }) => {
             if (provider && address) {
                 walletProvider = provider;
                 
-                // Return Address immediately if intent is connect
                 if (txParams.intent === 'connect') {
-                    statusBadge.innerText = "Connected!";
-                    statusText.innerText = "Address captured. Returning to chat...";
-                    btn.disabled = true;
-                    btn.innerText = "Success";
+                    document.getElementById('statusBadge').innerText = "Connected";
+                    btnAction.innerText = "Returning to Chat...";
                     
+                    // Update the payload to send action and confidence back to main.py
                     tg.sendData(JSON.stringify({ 
                         status: 'connected', 
                         address: address,
-                        asset: txParams.asset 
+                        asset: txParams.asset,
+                        action: txParams.action,
+                        confidence: txParams.confidence
                     }));
-                    setTimeout(() => tg.close(), 1500);
+                    
+                    setTimeout(() => tg.close(), 1000);
                     return; 
                 }
 
-                btn.disabled = false;
-                btn.innerHTML = `Sign Transaction <span class="ml-2">✍️</span>`;
-                btn.classList.remove('btn-primary');
-                btn.classList.add('bg-green-600', 'hover:bg-green-700', 'text-white');
-                btnDisconnect.style.display = "block";
-                statusBadge.innerText = "Wallet Connected";
-                statusBadge.className = "absolute top-4 right-4 bg-green-500/10 text-green-400 text-xs px-2 py-1 rounded-full border border-green-500/20 transition-colors duration-300";
-                
-                if (txParams.intent === 'sign_sodex' && chainId !== txParams.sodexChainId) {
-                    statusText.innerText = "Switching network to SoDEX...";
-                    try {
-                        await modal.switchNetwork(txParams.sodexChainId);
-                    } catch(e) {
-                        console.warn("Failed to switch network automatically to SoDEX", e);
-                    }
-                } else if (['swap', 'invest', 'portfolio'].includes(txParams.intent) && chainId !== txParams.chainId) {
-                    statusText.innerText = `Switching network to ${txParams.chain}...`;
-                    try {
-                        await modal.switchNetwork(txParams.chainId);
-                    } catch(e) {
-                        console.warn("Failed to switch network automatically");
-                    }
-                }
-            } else {
-                resetUI();
+                btnAction.disabled = false;
+                btnAction.innerHTML = `Confirm Execution <span class="ml-1">✍️</span>`;
+                btnAction.classList.remove('btn-primary');
+                btnAction.classList.add('bg-emerald-500', 'hover:bg-emerald-600', 'text-slate-900');
+                document.getElementById('btnDisconnect').style.display = "block";
+                document.getElementById('statusBadge').innerText = "Wallet Linked";
+                document.getElementById('statusBadge').className = "absolute top-4 right-4 bg-emerald-500/10 text-emerald-400 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-emerald-500/20";
             }
         });
 
-        function resetUI() {
-            walletProvider = null;
-            btn.innerText = "Connect Wallet";
-            btn.classList.add('btn-primary');
-            btn.classList.remove('bg-green-600', 'hover:bg-green-700', 'text-white');
-            btn.disabled = false;
-            btnDisconnect.style.display = "none";
-            statusBadge.innerText = "Pending Sign";
-            statusBadge.className = "absolute top-4 right-4 bg-yellow-500/10 text-yellow-500 text-xs px-2 py-1 rounded-full border border-yellow-500/20 transition-colors duration-300";
-            statusText.innerText = "";
-        }
-
-        btn.onclick = async () => {
+        btnAction.onclick = async () => {
             if (!walletProvider) {
-                btn.disabled = true;
-                statusText.innerText = "Connecting wallet...";
-                statusText.classList.remove('text-red-400');
                 await modal.open();
-                setTimeout(() => {
-                    if (!walletProvider) {
-                        btn.disabled = false;
-                        statusText.innerText = "";
-                    }
-                }, 500);
-            } else {
-                // Route to the correct execution function
-                if (txParams.intent === 'sign_sodex') {
-                    await signSodexOrder();
-                } else if (['swap', 'invest', 'portfolio'].includes(txParams.intent)) {
-                    await sendTransaction();
-                }
+            } else if (txParams.intent === 'sign_sodex') {
+                await signSodexOrder();
             }
         };
 
         async function signSodexOrder() {
             if (!walletProvider) return;
-            btn.disabled = true;
-            btn.innerHTML = `<div class="loader"></div>`;
-            statusText.innerText = "Check your wallet to sign the payload...";
+            btnAction.disabled = true;
+            btnAction.innerHTML = `<div class="loader"></div>`;
+            document.getElementById('statusText').innerText = "Awaiting signature in wallet...";
 
             try {
                 const ethersProvider = new BrowserProvider(walletProvider);
                 const signer = await ethersProvider.getSigner();
                 
-                const domain = {
-                    name: "spot",
-                    version: "1",
-                    chainId: txParams.sodexChainId, // USE THE DYNAMIC VARIABLE
-                };
-                
-                const types = {
-                    ExchangeAction: [
-                        { name: 'payloadHash', type: "bytes32" },
-                        { name: 'nonce', type: 'uint64' }
-                    ]
-                };
-                
-                const message = {
-                    payloadHash: txParams.hash,
-                    nonce: parseInt(txParams.nonce, 10) // Parsed to uint64 equivalent
-                };
+                const domain = { name: "spot", version: "1", chainId: txParams.sodexChainId };
+                const types = { ExchangeAction: [ { name: 'payloadHash', type: "bytes32" }, { name: 'nonce', type: 'uint64' } ] };
+                const message = { payloadHash: txParams.hash, nonce: parseInt(txParams.nonce, 10) };
 
                 const signature = await signer.signTypedData(domain, types, message);
 
-                statusText.innerText = "Signature Generated!";
-                btn.innerText = "Success! Returning...";
+                document.getElementById('statusText').innerText = "Payload Signed!";
+                btnAction.innerText = "Executing...";
                 
                 tg.sendData(JSON.stringify({ 
                     status: 'sodex_signed', 
@@ -299,49 +248,16 @@
                     address: txParams.address
                 }));
                 
-                setTimeout(() => tg.close(), 2000);
+                setTimeout(() => tg.close(), 1500);
             } catch (error) {
-                console.error(error);
-                btn.disabled = false;
-                btn.innerText = "Retry Sign";
-                statusText.innerText = "Error: " + (error.shortMessage || "Signature rejected");
-                statusText.classList.add('text-red-400');
+                btnAction.disabled = false;
+                btnAction.innerText = "Retry Sign";
+                document.getElementById('statusText').innerText = "User rejected signature.";
+                document.getElementById('statusText').classList.add('text-red-400');
             }
         }
 
-        btnDisconnect.onclick = async () => {
-            await modal.open({ view: 'Account' });
-        };
-
-        // Fallback for standard on-chain executions
-        async function sendTransaction() {
-            if (!walletProvider) return;
-            btn.disabled = true;
-            btn.innerHTML = `<div class="loader"></div>`;
-            statusText.innerText = "Check your wallet to confirm...";
-
-            try {
-                const ethersProvider = new BrowserProvider(walletProvider);
-                const signer = await ethersProvider.getSigner();
-                const tx = await signer.sendTransaction({
-                    to: txParams.to,
-                    value: txParams.value,
-                    data: txParams.data
-                });
-
-                statusText.innerText = "Transaction Sent!";
-                btn.innerText = "Success! Closing...";
-                
-                tg.sendData(JSON.stringify({ status: 'submitted', hash: tx.hash }));
-                setTimeout(() => tg.close(), 2000);
-            } catch (error) {
-                console.error(error);
-                btn.disabled = false;
-                btn.innerText = "Retry Sign";
-                statusText.innerText = "Error: " + (error.shortMessage || "Transaction rejected");
-                statusText.classList.add('text-red-400');
-            }
-        }
+        document.getElementById('btnDisconnect').onclick = () => modal.open({ view: 'Account' });
     </script>
 </body>
 </html>
