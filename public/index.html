@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SentiTrade | Agentic Execution</title>
+    
+    <script>
+        window.global = window;
+        window.process = { env: { NODE_ENV: 'production' } };
+    </script>
+
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -102,13 +108,20 @@
             </button>
         </div>
 
-        <p id="statusText" class="mt-3 text-center text-xs text-slate-400 h-4"></p>
+        <p id="statusText" class="mt-3 text-center text-xs text-slate-400 min-h-[1rem]"></p>
     </div>
 
     <script type="module">
-        // Switched from esm.sh to jsdelivr to prevent Telegram Web App silent module failures
-        import { createWeb3Modal, defaultConfig } from 'https://cdn.jsdelivr.net/npm/@web3modal/ethers@5.1.11/+esm';
-        import { BrowserProvider } from 'https://cdn.jsdelivr.net/npm/ethers@6.13.1/+esm';
+        // Added global error handler to print silent crashes to the UI
+        window.onerror = function(msg, url, line) {
+            document.getElementById('statusText').innerText = "Sys Error: " + msg;
+            document.getElementById('statusText').classList.add('text-red-400');
+        };
+
+        // CRITICAL: Added '?bundle' to force a single-file compilation.
+        // This stops Telegram from timing out on 100+ nested Web3 dependency network requests.
+        import { createWeb3Modal, defaultConfig } from 'https://esm.sh/@web3modal/ethers@5.1.11?bundle';
+        import { BrowserProvider } from 'https://esm.sh/ethers@6.13.1?bundle';
 
         const projectId = 'cfd6d68649717d2118148c25c6fb5aec'; 
         const metadata = { name: 'SentiTrade', description: 'DeFi Signer', url: window.location.origin, icons: [] };
@@ -142,7 +155,6 @@
         const aiCard = document.getElementById('aiIntelligenceCard');
         const ssvIndex = document.getElementById('sosovalue-index');
 
-        // Setup AI Explainability Card & SoSoValue Data if data exists
         if (txParams.asset !== 'Unknown') {
             aiCard.style.display = 'block';
             ssvIndex.style.display = 'block';
@@ -154,20 +166,16 @@
             const isSell = txParams.action.toUpperCase() === 'SELL';
             const ssvValue = document.getElementById('ssv-index-value');
 
-            // Map UI Colors based on AI Action Data
             if(isSell) {
-                // Adjust Signal Bar
                 document.getElementById('confidenceBar').classList.replace('from-cyan-500', 'from-red-500');
                 document.getElementById('confidenceBar').classList.replace('to-blue-500', 'to-orange-500');
                 document.getElementById('confidenceValue').classList.replace('text-cyan-400', 'text-red-400');
                 
-                // Adjust SoSoValue Index Matrix
                 ssvValue.innerText = 'Bearish Bias';
                 ssvValue.className = 'text-xs font-bold text-red-400';
                 document.getElementById('ssv-bear').classList.replace('bg-red-500/10', 'bg-red-500/80');
                 document.getElementById('ssv-bear').classList.add('shadow-[0_0_12px_rgba(239,68,68,0.4)]');
             } else {
-                // Adjust SoSoValue Index Matrix
                 ssvValue.innerText = 'Bullish Conviction';
                 ssvValue.className = 'text-xs font-bold text-emerald-400';
                 document.getElementById('ssv-bull').classList.replace('bg-emerald-500/10', 'bg-emerald-500/80');
@@ -175,7 +183,6 @@
             }
         }
 
-        // Contextual UI adjustments
         if (txParams.intent === 'sign_sodex') {
              elActionLabel.innerText = "Authorize Execution";
              elAmountDisplay.innerText = txParams.action;
@@ -219,18 +226,24 @@
             }
         });
 
-        // Using standard event listener with error trapping for mobile reliability
+        // Click handler with visual fallback
         btnAction.addEventListener('click', async (e) => {
             e.preventDefault();
+            const originalText = btnAction.innerHTML;
+            btnAction.innerHTML = `<div class="loader"></div>`; 
             try {
                 if (!walletProvider) {
                     await modal.open();
+                    // Restore button if user closes modal without connecting
+                    btnAction.innerHTML = originalText;
                 } else if (txParams.intent === 'sign_sodex') {
                     await signSodexOrder();
                 }
             } catch (err) {
                 console.error("Wallet modal error:", err);
-                document.getElementById('statusText').innerText = "Wallet UI blocked. Please try again.";
+                document.getElementById('statusText').innerText = "Wallet Error: " + err.message;
+                document.getElementById('statusText').classList.add('text-red-400');
+                btnAction.innerHTML = originalText;
             }
         });
 
@@ -239,6 +252,7 @@
             btnAction.disabled = true;
             btnAction.innerHTML = `<div class="loader"></div>`;
             document.getElementById('statusText').innerText = "Awaiting signature in wallet...";
+            document.getElementById('statusText').classList.remove('text-red-400');
 
             try {
                 const ethersProvider = new BrowserProvider(walletProvider);
