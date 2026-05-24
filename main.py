@@ -47,10 +47,23 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             await answer_callback_query(callback_id, "Signal discarded from ValueChain.")
             
         elif data.startswith("approve_"):
-            asset = data.split("_")[1]
+            # Extract the new data passed from the updated bot_logic.py
+            parts = data.split("_")
+            asset = parts[1]
+            action = parts[2] if len(parts) > 2 else "BUY"
+            confidence = parts[3] if len(parts) > 3 else "80"
+            
             await answer_callback_query(callback_id, "Initializing Agentic Routing...")
             
-            web_app_url = f"{MINI_APP_URL}?intent=connect&asset={asset}"
+            # URL encode the parameters to pass to the frontend
+            query_params = urllib.parse.urlencode({
+                "intent": "connect",
+                "asset": asset,
+                "action": action,
+                "confidence": confidence
+            })
+            
+            web_app_url = f"{MINI_APP_URL}?{query_params}"
             
             keyboard = {
                 "keyboard": [
@@ -83,19 +96,28 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user_address = web_app_payload.get("address")
                 asset = web_app_payload.get("asset", "Unknown")
                 
+                # Extract action and confidence from the frontend payload
+                action = web_app_payload.get("action", "BUY")
+                confidence = web_app_payload.get("confidence", "80")
+                
                 await send_direct_message(chat_id, f"⏳ **Analyzing ValueChain...**\nPreparing AI-driven SoDEX order for {asset}.")
                 
                 try:
-                    order_data = await prepare_sodex_order(asset=asset, action="BUY", address=user_address)
+                    # Pass the dynamic action instead of hardcoding "BUY"
+                    order_data = await prepare_sodex_order(asset=asset, action=action, address=user_address)
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
 
+                    # Add asset, action, and confidence to the query parameters
                     query_params = urllib.parse.urlencode({
                         "intent": "sign_sodex",
                         "hash": order_data["payload_hash"],
                         "nonce": order_data["nonce"],
                         "payload": order_data["compact_json"],
                         "address": user_address,
-                        "sodexChainId": sodex_chain_id 
+                        "sodexChainId": sodex_chain_id,
+                        "asset": asset,
+                        "action": action,
+                        "confidence": confidence
                     })
                     
                     web_app_url = f"{MINI_APP_URL}?{query_params}"

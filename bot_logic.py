@@ -206,12 +206,25 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     clean_asset = signal['asset'].replace("$", "")
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
+    # Generate a visual confidence bar (e.g., 80% = 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜)
+    filled_blocks = int(signal['confidence'] / 10)
+    empty_blocks = 10 - filled_blocks
+    confidence_bar = "🟩" * filled_blocks + "⬜" * empty_blocks
+    
+    # Visual cues for action
+    action_emoji = "🟢 BUY" if signal['action'].upper() == "BUY" else "🔴 SELL"
+    volatility_formatted = f"{signal.get('volatility', 0.0):.2f}%"
+    
+    # Store rationale in callback data so the web app can access it later (using a temporary cache or passing via URL in main.py)
+    # We pass the basic params needed for the next step
+    callback_data_approve = f"approve_{clean_asset}_{signal['action']}_{signal['confidence']}"
+    
     keyboard = {
         "inline_keyboard": [
             [
                 {
                     "text": "⚡ Route via SoDEX", 
-                    "callback_data": f"approve_{clean_asset}"
+                    "callback_data": callback_data_approve
                 },
                 {
                     "text": "❌ Ignore", 
@@ -221,13 +234,20 @@ async def send_telegram_alert(chat_id: int, signal: dict):
         ]
     }
     
-    # Format the volatility to 2 decimal places, defaulting to 0.0 if not present
-    volatility_formatted = f"{signal.get('volatility', 0.0):.2f}%"
+    # Upgraded Markdown Message
+    alert_text = (
+        f"🧠 **ValueChain AI Intelligence**\n\n"
+        f"**Asset:** {signal['asset']}\n"
+        f"**Action:** {action_emoji}\n"
+        f"**Confidence:** {signal['confidence']}%\n"
+        f"{confidence_bar}\n\n"
+        f"📊 **24h Volatility:** {volatility_formatted}\n"
+        f"💡 **AI Rationale:** _{signal['rationale']}_\n"
+    )
     
-    # UPDATED: Added the 24h Volatility line to the text output
     payload = {
         "chat_id": chat_id,
-        "text": f"🌐 **ValueChain Intelligence**\n🤖 Action: {signal['action']} {signal['asset']}\n📈 24h Volatility: {volatility_formatted}\nConfidence: {signal['confidence']}%\nRationale: {signal['rationale']}",
+        "text": alert_text,
         "parse_mode": "Markdown",
         "reply_markup": json.dumps(keyboard)
     }
