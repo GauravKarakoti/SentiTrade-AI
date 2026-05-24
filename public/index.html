@@ -6,7 +6,6 @@
     <title>SentiTrade | Agentic Execution</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         body { background-color: #0b0f19; color: #f8fafc; font-family: 'Inter', sans-serif; }
         .gradient-text { background: linear-gradient(135deg, #00f2fe, #4facfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -19,9 +18,6 @@
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .fade-in { animation: fadeIn 0.4s ease-out forwards; opacity: 0; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-        
-        /* Chart Container Styling */
-        #tvchart { width: 100%; height: 180px; border-radius: 8px; overflow: hidden; margin-top: 1rem; border: 1px solid rgba(255,255,255,0.05); }
     </style>
 </head>
 <body class="flex flex-col items-center min-h-screen p-4 pb-10">
@@ -46,7 +42,22 @@
                 </div>
             </div>
 
-            <div id="tvchart" class="bg-slate-900 hidden"></div>
+            <div id="sosovalue-index" class="bg-slate-900/80 hidden rounded-xl p-4 border border-slate-700/50 mt-4 mb-2 shadow-inner">
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-[10px] text-slate-400 font-mono tracking-widest uppercase">SoSoValue Narrative Index</span>
+                    <span class="text-xs font-bold" id="ssv-index-value">Evaluating...</span>
+                </div>
+                <div class="flex gap-1 h-6">
+                    <div id="ssv-bear" class="flex-1 bg-red-500/10 rounded-l-sm transition-all duration-500"></div>
+                    <div id="ssv-neut" class="flex-1 bg-slate-500/20 transition-all duration-500"></div>
+                    <div id="ssv-bull" class="flex-1 bg-emerald-500/10 rounded-r-sm transition-all duration-500"></div>
+                </div>
+                <div class="flex justify-between text-[9px] text-slate-500 mt-2 uppercase font-bold tracking-wider">
+                    <span>Bearish</span>
+                    <span>Neutral</span>
+                    <span>Bullish</span>
+                </div>
+            </div>
 
             <div id="aiIntelligenceCard" class="ai-card rounded-lg p-3 hidden">
                 <div class="flex justify-between items-center mb-2">
@@ -95,10 +106,11 @@
     </div>
 
     <script type="module">
-        import { createWeb3Modal, defaultConfig } from 'https://esm.sh/@web3modal/ethers@5.1.11';
-        import { BrowserProvider } from 'https://esm.sh/ethers@6.13.1';
+        // Switched from esm.sh to jsdelivr to prevent Telegram Web App silent module failures
+        import { createWeb3Modal, defaultConfig } from 'https://cdn.jsdelivr.net/npm/@web3modal/ethers@5.1.11/+esm';
+        import { BrowserProvider } from 'https://cdn.jsdelivr.net/npm/ethers@6.13.1/+esm';
 
-        const projectId = 'cfd6d68649717d2118148c25c6fb5aec'; // Keep your original project ID
+        const projectId = 'cfd6d68649717d2118148c25c6fb5aec'; 
         const metadata = { name: 'SentiTrade', description: 'DeFi Signer', url: window.location.origin, icons: [] };
         
         const chains = [
@@ -123,49 +135,44 @@
             sodexChainId: parseInt(urlParams.get('sodexChainId') || '286623', 10) 
         };
 
-        // UI Element Selectors
         const elActionLabel = document.getElementById('actionLabel');
         const elAmountDisplay = document.getElementById('amountDisplay');
         const elTokenDisplay = document.getElementById('tokenDisplay');
         const btnAction = document.getElementById('btnAction');
         const aiCard = document.getElementById('aiIntelligenceCard');
+        const ssvIndex = document.getElementById('sosovalue-index');
 
-        // Setup AI Explainability Card if data exists
+        // Setup AI Explainability Card & SoSoValue Data if data exists
         if (txParams.asset !== 'Unknown') {
             aiCard.style.display = 'block';
-            document.getElementById('tvchart').style.display = 'block';
+            ssvIndex.style.display = 'block';
+            
             document.getElementById('confidenceValue').innerText = `${txParams.confidence}%`;
             document.getElementById('confidenceBar').style.width = `${txParams.confidence}%`;
             document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
             
-            // Set action colors
-            if(txParams.action.toUpperCase() === 'SELL') {
+            const isSell = txParams.action.toUpperCase() === 'SELL';
+            const ssvValue = document.getElementById('ssv-index-value');
+
+            // Map UI Colors based on AI Action Data
+            if(isSell) {
+                // Adjust Signal Bar
                 document.getElementById('confidenceBar').classList.replace('from-cyan-500', 'from-red-500');
                 document.getElementById('confidenceBar').classList.replace('to-blue-500', 'to-orange-500');
                 document.getElementById('confidenceValue').classList.replace('text-cyan-400', 'text-red-400');
+                
+                // Adjust SoSoValue Index Matrix
+                ssvValue.innerText = 'Bearish Bias';
+                ssvValue.className = 'text-xs font-bold text-red-400';
+                document.getElementById('ssv-bear').classList.replace('bg-red-500/10', 'bg-red-500/80');
+                document.getElementById('ssv-bear').classList.add('shadow-[0_0_12px_rgba(239,68,68,0.4)]');
+            } else {
+                // Adjust SoSoValue Index Matrix
+                ssvValue.innerText = 'Bullish Conviction';
+                ssvValue.className = 'text-xs font-bold text-emerald-400';
+                document.getElementById('ssv-bull').classList.replace('bg-emerald-500/10', 'bg-emerald-500/80');
+                document.getElementById('ssv-bull').classList.add('shadow-[0_0_12px_rgba(16,185,129,0.4)]');
             }
-
-            // Initialize Lightweight Chart (Simulating Real-Time Visuals)
-            initChart();
-        }
-
-        function initChart() {
-            const chartOptions = { 
-                layout: { textColor: '#94a3b8', background: { type: 'solid', color: 'transparent' } },
-                grid: { vertLines: { color: 'rgba(255,255,255,0.02)' }, horzLines: { color: 'rgba(255,255,255,0.02)' } },
-                timeScale: { visible: false },
-                rightPriceScale: { borderVisible: false }
-            };
-            const chart = LightweightCharts.createChart(document.getElementById('tvchart'), chartOptions);
-            const lineSeries = chart.addLineSeries({ color: txParams.action.toUpperCase() === 'SELL' ? '#ef4444' : '#0ea5e9', lineWidth: 2 });
-            
-            // Simulate recent price action data to give the UI a "live" feel while connecting
-            const mockData = Array.from({length: 30}, (_, i) => ({
-                time: `2024-01-${(i+1).toString().padStart(2, '0')}`,
-                value: 100 + Math.random() * 20 + (txParams.action === 'BUY' ? i : -i) // Trend based on signal
-            }));
-            lineSeries.setData(mockData);
-            chart.timeScale().fitContent();
         }
 
         // Contextual UI adjustments
@@ -190,7 +197,6 @@
                     document.getElementById('statusBadge').innerText = "Connected";
                     btnAction.innerText = "Returning to Chat...";
                     
-                    // Update the payload to send action and confidence back to main.py
                     tg.sendData(JSON.stringify({ 
                         status: 'connected', 
                         address: address,
@@ -213,13 +219,20 @@
             }
         });
 
-        btnAction.onclick = async () => {
-            if (!walletProvider) {
-                await modal.open();
-            } else if (txParams.intent === 'sign_sodex') {
-                await signSodexOrder();
+        // Using standard event listener with error trapping for mobile reliability
+        btnAction.addEventListener('click', async (e) => {
+            e.preventDefault();
+            try {
+                if (!walletProvider) {
+                    await modal.open();
+                } else if (txParams.intent === 'sign_sodex') {
+                    await signSodexOrder();
+                }
+            } catch (err) {
+                console.error("Wallet modal error:", err);
+                document.getElementById('statusText').innerText = "Wallet UI blocked. Please try again.";
             }
-        };
+        });
 
         async function signSodexOrder() {
             if (!walletProvider) return;
