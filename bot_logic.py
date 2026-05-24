@@ -18,6 +18,7 @@ class SentimentAnalysis(BaseModel):
     confidence: int
     narrative_tags: list[str]
     rationale: str
+    source_headline: str
 
 async def fetch_news_from_api() -> list[dict]:
     if not SOSOVALUE_API_KEY:
@@ -131,6 +132,7 @@ For each article, output a JSON object with:
 - "confidence": integer between 0 and 100
 - "narrative_tags": array of relevant tags (e.g., "AI x Web3", "SoDEX Liquidity")
 - "rationale": a short sentence explaining the autonomous decision (max 150 chars).
+- "source_headline": The exact title of the primary article driving this sentiment.
 
 Return the result as a JSON array of objects, with one object per article.
 Articles:
@@ -193,7 +195,8 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
                     "asset": sa.asset,
                     "action": "BUY" if sa.sentiment == "bullish" else "SELL",
                     "confidence": sa.confidence,
-                    "rationale": sa.rationale
+                    "rationale": sa.rationale,
+                    "source_headline": sa.source_headline
                 })
         except ValidationError:
             continue
@@ -206,18 +209,22 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     clean_asset = signal['asset'].replace("$", "")
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # Generate a visual confidence bar (e.g., 80% = 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜)
-    filled_blocks = int(signal['confidence'] / 10)
+    # Calculate Risk-Adjusted Confidence
+    volatility = signal.get('volatility', 0.0)
+    risk_penalty = int(volatility * 0.5) 
+    adjusted_confidence = max(0, signal['confidence'] - risk_penalty)
+    
+    # Generate a visual confidence bar
+    filled_blocks = int(adjusted_confidence / 10)
     empty_blocks = 10 - filled_blocks
     confidence_bar = "🟩" * filled_blocks + "⬜" * empty_blocks
     
     # Visual cues for action
     action_emoji = "🟢 BUY" if signal['action'].upper() == "BUY" else "🔴 SELL"
-    volatility_formatted = f"{signal.get('volatility', 0.0):.2f}%"
+    volatility_formatted = f"{volatility:.2f}%"
     
-    # Store rationale in callback data so the web app can access it later (using a temporary cache or passing via URL in main.py)
-    # We pass the basic params needed for the next step
-    callback_data_approve = f"approve_{clean_asset}_{signal['action']}_{signal['confidence']}"
+    # Route approval via adjusted confidence
+    callback_data_approve = f"approve_{clean_asset}_{signal['action']}_{adjusted_confidence}"
     
     keyboard = {
         "inline_keyboard": [
@@ -239,10 +246,11 @@ async def send_telegram_alert(chat_id: int, signal: dict):
         f"🧠 **ValueChain AI Intelligence**\n\n"
         f"**Asset:** {signal['asset']}\n"
         f"**Action:** {action_emoji}\n"
-        f"**Confidence:** {signal['confidence']}%\n"
+        f"**Risk-Adjusted Confidence:** {adjusted_confidence}%\n"
         f"{confidence_bar}\n\n"
-        f"📊 **24h Volatility:** {volatility_formatted}\n"
-        f"💡 **AI Rationale:** _{signal['rationale']}_\n"
+        f"📰 **Source Driver:** _{signal['source_headline']}_\n"
+        f"💡 **AI Rationale:** {signal['rationale']}\n"
+        f"📊 **24h Volatility Risk:** {volatility_formatted}\n"
     )
     
     payload = {

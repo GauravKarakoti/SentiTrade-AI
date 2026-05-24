@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, BigInteger, Boolean, Integer, DateTime
+from sqlalchemy import Column, String, BigInteger, Boolean, Integer, DateTime, Float
 from datetime import datetime
 
 load_dotenv()
@@ -28,7 +28,6 @@ class NewsCache(Base):
     __tablename__ = "news_cache"
     news_id = Column(String, primary_key=True, index=True)
 
-# NEW: ValueChain tracking for the Agentic System
 class ValueChainAnalytics(Base):
     __tablename__ = "valuechain_analytics"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -36,15 +35,18 @@ class ValueChainAnalytics(Base):
     sentiment = Column(String)
     confidence = Column(Integer)
     rationale = Column(String)
+    source_article = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     sodex_routed = Column(Boolean, default=False)
+    # Backtesting & False-Signal Tracking
+    forward_price_change = Column(Float, nullable=True) 
+    pnl_percentage = Column(Float, nullable=True)       
+    signal_accuracy = Column(Boolean, nullable=True)    
 
 async def init_db():
-    """Creates tables if they don't exist."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 async def get_db():
-    """Dependency for FastAPI to get DB sessions."""
     async with AsyncSessionLocal() as session:
         yield session

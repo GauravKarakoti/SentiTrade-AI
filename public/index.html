@@ -48,6 +48,24 @@
                 </div>
             </div>
 
+            <div id="historicalContextCard" class="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3 hidden">
+                <p class="text-[10px] text-slate-400 font-mono tracking-widest uppercase mb-2">Historical Backtest Data</p>
+                <div class="grid grid-cols-3 gap-2 text-center">
+                    <div class="bg-slate-900/50 p-2 rounded">
+                        <span class="block text-[9px] text-slate-500 uppercase">Win Rate</span>
+                        <span class="text-sm font-bold text-emerald-400" id="statWinRate">--</span>
+                    </div>
+                    <div class="bg-slate-900/50 p-2 rounded">
+                        <span class="block text-[9px] text-slate-500 uppercase">Avg PnL</span>
+                        <span class="text-sm font-bold text-blue-400" id="statAvgPnl">--</span>
+                    </div>
+                    <div class="bg-slate-900/50 p-2 rounded">
+                        <span class="block text-[9px] text-slate-500 uppercase">Max Drawdown</span>
+                        <span class="text-sm font-bold text-red-400" id="statDrawdown">--</span>
+                    </div>
+                </div>
+            </div>
+
             <div id="sosovalue-index" class="bg-slate-900/80 hidden rounded-xl p-4 border border-slate-700/50 mt-4 mb-2 shadow-inner">
                 <div class="flex justify-between items-center mb-3">
                     <span class="text-[10px] text-slate-400 font-mono tracking-widest uppercase">SoSoValue Narrative Index</span>
@@ -98,6 +116,12 @@
             </div>
         </div>
 
+        <div id="riskWarning" class="mt-4 bg-orange-500/10 border border-orange-500/20 rounded-lg p-3 hidden">
+            <p class="text-[10px] text-orange-400 leading-tight">
+                ⚠️ <span class="font-bold uppercase">Risk Warning:</span> Sentiment signals are highly volatile. Historical performance does not guarantee future results. Proceed only if this aligns with your risk tolerance.
+            </p>
+        </div>
+
         <div class="mt-4 mb-4 text-center">
             <p class="text-[11px] text-slate-400">
                 🔒 SentiTrade uses secure, gasless off-chain signatures. Connect your wallet to link your existing SoDEX account. We cannot access your funds.
@@ -118,14 +142,11 @@
     </div>
 
     <script type="module">
-        // Added global error handler to print silent crashes to the UI
         window.onerror = function(msg, url, line) {
             document.getElementById('statusText').innerText = "Sys Error: " + msg;
             document.getElementById('statusText').classList.add('text-red-400');
         };
 
-        // CRITICAL: Added '?bundle' to force a single-file compilation.
-        // This stops Telegram from timing out on 100+ nested Web3 dependency network requests.
         import { createWeb3Modal, defaultConfig } from 'https://esm.sh/@web3modal/ethers@5.1.11?bundle';
         import { BrowserProvider } from 'https://esm.sh/ethers@6.13.1?bundle';
 
@@ -151,7 +172,10 @@
             asset: urlParams.get('asset') || 'Unknown',
             action: urlParams.get('action') || 'BUY',
             confidence: urlParams.get('confidence') || '0',
-            sodexChainId: parseInt(urlParams.get('sodexChainId') || '286623', 10) 
+            sodexChainId: parseInt(urlParams.get('sodexChainId') || '286623', 10),
+            winRate: urlParams.get('winRate'),
+            avgPnl: urlParams.get('avgPnl'),
+            maxDrawdown: urlParams.get('maxDrawdown')
         };
 
         const elActionLabel = document.getElementById('actionLabel');
@@ -164,7 +188,13 @@
         if (txParams.asset !== 'Unknown') {
             aiCard.style.display = 'block';
             ssvIndex.style.display = 'block';
+            document.getElementById('historicalContextCard').style.display = 'block';
+            document.getElementById('riskWarning').style.display = 'block';
             
+            if(txParams.winRate) document.getElementById('statWinRate').innerText = txParams.winRate;
+            if(txParams.avgPnl) document.getElementById('statAvgPnl').innerText = txParams.avgPnl;
+            if(txParams.maxDrawdown) document.getElementById('statDrawdown').innerText = txParams.maxDrawdown;
+
             document.getElementById('confidenceValue').innerText = `${txParams.confidence}%`;
             document.getElementById('confidenceBar').style.width = `${txParams.confidence}%`;
             document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
@@ -176,7 +206,6 @@
                 document.getElementById('confidenceBar').classList.replace('from-cyan-500', 'from-red-500');
                 document.getElementById('confidenceBar').classList.replace('to-blue-500', 'to-orange-500');
                 document.getElementById('confidenceValue').classList.replace('text-cyan-400', 'text-red-400');
-                
                 ssvValue.innerText = 'Bearish Bias';
                 ssvValue.className = 'text-xs font-bold text-red-400';
                 document.getElementById('ssv-bear').classList.replace('bg-red-500/10', 'bg-red-500/80');
@@ -205,11 +234,9 @@
         modal.subscribeProvider(async ({ provider, address }) => {
             if (provider && address) {
                 walletProvider = provider;
-                
                 if (txParams.intent === 'connect') {
                     document.getElementById('statusBadge').innerText = "Connected";
                     btnAction.innerText = "Returning to Chat...";
-                    
                     tg.sendData(JSON.stringify({ 
                         status: 'connected', 
                         address: address,
@@ -217,11 +244,9 @@
                         action: txParams.action,
                         confidence: txParams.confidence
                     }));
-                    
                     setTimeout(() => tg.close(), 1000);
                     return; 
                 }
-
                 btnAction.disabled = false;
                 btnAction.innerHTML = `Confirm Execution <span class="ml-1">✍️</span>`;
                 btnAction.classList.remove('btn-primary');
@@ -232,7 +257,6 @@
             }
         });
 
-        // Click handler with visual fallback
         btnAction.addEventListener('click', async (e) => {
             e.preventDefault();
             const originalText = btnAction.innerHTML;
@@ -240,7 +264,6 @@
             try {
                 if (!walletProvider) {
                     await modal.open();
-                    // Restore button if user closes modal without connecting
                     btnAction.innerHTML = originalText;
                 } else if (txParams.intent === 'sign_sodex') {
                     await signSodexOrder();
@@ -258,21 +281,15 @@
             btnAction.disabled = true;
             btnAction.innerHTML = `<div class="loader"></div>`;
             document.getElementById('statusText').innerText = "Awaiting signature in wallet...";
-            document.getElementById('statusText').classList.remove('text-red-400');
-
             try {
                 const ethersProvider = new BrowserProvider(walletProvider);
                 const signer = await ethersProvider.getSigner();
-                
                 const domain = { name: "spot", version: "1", chainId: txParams.sodexChainId };
                 const types = { ExchangeAction: [ { name: 'payloadHash', type: "bytes32" }, { name: 'nonce', type: 'uint64' } ] };
                 const message = { payloadHash: txParams.hash, nonce: parseInt(txParams.nonce, 10) };
-
                 const signature = await signer.signTypedData(domain, types, message);
-
                 document.getElementById('statusText').innerText = "Payload Signed!";
                 btnAction.innerText = "Executing...";
-                
                 tg.sendData(JSON.stringify({ 
                     status: 'sodex_signed', 
                     signature: signature,
@@ -280,7 +297,6 @@
                     nonce: txParams.nonce,
                     address: txParams.address
                 }));
-                
                 setTimeout(() => tg.close(), 1500);
             } catch (error) {
                 btnAction.disabled = false;

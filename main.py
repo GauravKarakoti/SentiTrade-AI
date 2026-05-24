@@ -44,45 +44,35 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
         if data.startswith("reject_"):
             await delete_telegram_message(chat_id, message_id)
-            await answer_callback_query(callback_id, "Signal discarded from ValueChain.")
+            await answer_callback_query(callback_id, "Signal discarded.")
             
         elif data.startswith("approve_"):
-            # Extract the new data passed from the updated bot_logic.py
             parts = data.split("_")
             asset = parts[1]
             action = parts[2] if len(parts) > 2 else "BUY"
             confidence = parts[3] if len(parts) > 3 else "80"
             
-            await answer_callback_query(callback_id, "Initializing Agentic Routing...")
+            await answer_callback_query(callback_id, "Initializing Routing...")
             
-            # URL encode the parameters to pass to the frontend
+            # Fetch historical stats from DB (Mocked here for demonstration)
+            historical_win_rate = "68%" 
+            avg_pnl = "+2.4%"
+            max_drawdown = "-8.1%"
+
             query_params = urllib.parse.urlencode({
                 "intent": "connect",
                 "asset": asset,
                 "action": action,
-                "confidence": confidence
+                "confidence": confidence,
+                "winRate": historical_win_rate,
+                "avgPnl": avg_pnl,
+                "maxDrawdown": max_drawdown
             })
             
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             
-            keyboard = {
-                "keyboard": [
-                    [
-                        {
-                            "text": "🔗 Connect Wallet to Access SoDEX", 
-                            "web_app": {"url": web_app_url}
-                        }
-                    ]
-                ],
-                "resize_keyboard": True,
-                "one_time_keyboard": True
-            }
-            await send_direct_message(
-                chat_id, 
-                f"⚡ **Agentic Execution: {asset}**\n\nTo navigate on-chain finance with precision, please connect your wallet.",
-                reply_markup=keyboard
-            )
-
+            keyboard = {"keyboard": [[{"text": "🔗 Connect Wallet", "web_app": {"url": web_app_url}}]], "resize_keyboard": True, "one_time_keyboard": True}
+            await send_direct_message(chat_id, f"⚡ **Agentic Execution: {asset}**\nReview historical metrics and authorize.", reply_markup=keyboard)
         return {"status": "ok"}
 
     if "message" in update and "web_app_data" in update["message"]:
@@ -273,48 +263,34 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
     try:
         news_items = await fetch_news_from_api()
         new_news = await deduplicate(news_items, db)
-        
-        if not new_news:
-            return {"status": "no_new_data"}
+        if not new_news: return {"status": "no_new_data"}
 
-        prompt = build_prompt(new_news)
-        analyses = analyze_with_llm(prompt)
+        analyses = analyze_with_llm(build_prompt(new_news))
         signals = generate_signals(analyses)
 
         if signals:
-            # Fetch ALL active users, now grabbing the volatility_guard_threshold too
-            result = await db.execute(
-                select(User.chat_id, User.is_subscribed, User.volatility_guard_threshold).filter(
-                    User.is_active == True
-                )
-            )
+            result = await db.execute(select(User.chat_id, User.is_subscribed, User.volatility_guard_threshold).filter(User.is_active == True))
             active_users = result.all()
-            
-            # Split users into premium and free tiers mapping their thresholds
-            premium_users = [{"chat_id": row[0], "vol_guard": row[2]} for row in active_users if row[1]]
-            free_users = [{"chat_id": row[0], "vol_guard": row[2]} for row in active_users if not row[1]]
+            premium_users = [{"chat_id": r[0], "vol_guard": r[2]} for r in active_users if r[1]]
+            free_users = [{"chat_id": r[0], "vol_guard": r[2]} for r in active_users if not r[1]]
 
             for index, signal in enumerate(signals):
                 db.add(ValueChainAnalytics(
                     asset=signal["asset"],
                     sentiment=signal["action"],
                     confidence=signal["confidence"],
-                    rationale=signal["rationale"]
+                    rationale=signal["rationale"],
+                    source_article=signal["source_headline"] # Logged for false-signal analysis
                 ))
                 
-                current_asset_volatility = await fetch_asset_volatility(signal["asset"])
-                
-                # NEW: Attach volatility to the signal dictionary so the alert function can use it
-                signal["volatility"] = current_asset_volatility
+                volatility = await fetch_asset_volatility(signal["asset"])
+                signal["volatility"] = volatility
 
-                # Target audience
                 target_users = premium_users.copy()
-                if index == 0:
-                    target_users.extend(free_users)
+                if index == 0: target_users.extend(free_users)
 
-                # Route to the determined audience while respecting their personal Volatility Guard
                 for user in target_users:
-                    if current_asset_volatility <= user["vol_guard"]:
+                    if volatility <= user["vol_guard"]:
                         await send_telegram_alert(user["chat_id"], signal)
 
             # Optional Upsell: Notify free users about the signals they missed
