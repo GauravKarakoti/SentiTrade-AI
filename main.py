@@ -202,11 +202,34 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             if not user:
                 db.add(User(chat_id=chat_id, is_active=True))
                 await db.commit()
-                await send_direct_message(chat_id, "Welcome to the SoSoValue Ecosystem! SentiTrade-AI will now route actionable intelligence to you. Use /subscribe to unlock premium SoDEX routing alerts.")
+                welcome_message = (
+                    "🤖 **Welcome to SentiTrade-AI!**\n\n"
+                    "I am your agentic gateway to intelligent finance. I analyze market narratives and help you execute trades seamlessly.\n\n"
+                    "**Here is how to get started:**\n"
+                    "1️⃣ **Wait for Signals:** I will automatically send you AI-analyzed trade signals based on real-time news.\n"
+                    "2️⃣ **Manage Risk:** Use `/volatility 15` to set your maximum volatility guard (default is 15%). Signals above this threshold are blocked.\n"
+                    "3️⃣ **Execute Trades:** When you receive a signal, click 'Route via SoDEX' to securely authorize the trade via our MiniApp.\n\n"
+                    "Use `/subscribe` anytime to unlock premium features and faster alerts!"
+                )
+                await send_direct_message(chat_id, welcome_message)
             else:
                 user.is_active = True
                 await db.commit()
                 await send_direct_message(chat_id, "Agentic alerts reactivated. Use /subscribe to unlock premium SoDEX routing alerts.")
+        
+        elif text == "/help":
+            help_message = (
+                "📚 **SentiTrade-AI Command Directory**\n\n"
+                "Here are the commands you can use to control your agentic experience:\n\n"
+                "🔹 `/start` - Activate the agent and view the onboarding guide.\n"
+                "🔹 `/help` - View this list of available commands.\n"
+                "🔹 `/volatility <percentage>` - Set your risk guard (e.g., `/volatility 15`). Automatically blocks signals for assets exceeding this 24h volatility limit.\n"
+                "🔹 `/subscribe` - Unlock the premium ValueChain stream and SoDEX routing alerts.\n"
+                "🔹 `/stop` - Take the agent offline and stop receiving all alerts.\n\n"
+                "💡 *Tip: You can also chat with me directly! Send any message to ask about market narratives, SoDEX routing, or on-chain finance.*"
+            )
+            await send_direct_message(chat_id, help_message)
+
         elif text == "/stop":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
@@ -214,6 +237,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.is_active = False
                 await db.commit()
                 await send_direct_message(chat_id, "Agent offline. You have opted out of the ValueChain stream.")
+        
         elif text == "/subscribe":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
@@ -222,6 +246,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.is_subscribed = True 
                 await db.commit()
                 await send_direct_message(chat_id, "🎉 **Subscription Activated!** You will now receive agentic SoDEX trade signals.")
+        
         elif text.startswith("/volatility"):
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
@@ -236,6 +261,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     )
                 except (IndexError, ValueError):
                     await send_direct_message(chat_id, "⚠️ **Usage:** `/volatility <percentage>` (e.g., `/volatility 15`)")
+        
         else:
             reply_text = generate_chat_reply(text)
             await send_direct_message(chat_id, reply_text)
