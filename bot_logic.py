@@ -3,12 +3,7 @@ import os
 import httpx
 from groq import Groq
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from db import NewsCache
 
-SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
-SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -20,112 +15,6 @@ class SentimentAnalysis(BaseModel):
     rationale: str
     source_headline: str
 
-async def fetch_news_from_api() -> list[dict]:
-    if not SOSOVALUE_API_KEY:
-        raise ValueError("CRITICAL: SOSOVALUE_API_KEY is not set.")
-
-    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
-    url = f"{SOSOVALUE_BASE_URL}/v1/news"
-    params = {"limit": 20}
-    
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        data = resp.json().get("data")
-        
-    return data.get("list", []) if isinstance(data, dict) else []
-
-async def fetch_currency_id(asset: str) -> str:
-    if not SOSOVALUE_API_KEY:
-        return ""
-
-    clean_asset = asset.replace("$", "").upper()
-    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
-    url = f"{SOSOVALUE_BASE_URL}/v1/currencies"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            
-            response_data = resp.json()
-            currencies = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
-            
-            if isinstance(currencies, list):
-                for currency in currencies:
-                    if currency.get("symbol", "").upper() == clean_asset:
-                        return currency.get("currency_id", "")
-                        
-    except Exception as e:
-        print(f"Currency ID fetch error for {clean_asset}: {str(e)}")
-        
-    return ""
-
-async def fetch_asset_volatility(asset: str) -> float:
-    if not SOSOVALUE_API_KEY:
-        return 0.0
-    
-    clean_asset = asset.replace("$", "").upper()
-    cid = await fetch_currency_id(clean_asset)
-    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
-    url = f"{SOSOVALUE_BASE_URL}/v1/currencies/{cid}/market-snapshot"
-    
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            
-            response_data = resp.json()
-            payload = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
-            vol_value = payload.get("change_pct_24h", 0.0)
-            return abs(float(vol_value))
-                
-    except Exception as e:
-        print(f"Volatility fetch error for {clean_asset}: {str(e)}")
-        
-    return 0.0
-
-# NEW: Price fetching logic
-async def fetch_asset_price(asset: str) -> float:
-    if not SOSOVALUE_API_KEY:
-        return 0.0
-    
-    clean_asset = asset.replace("$", "").upper()
-    cid = await fetch_currency_id(clean_asset)
-    if not cid:
-        return 0.0
-        
-    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
-    url = f"{SOSOVALUE_BASE_URL}/v1/currencies/{cid}/market-snapshot"
-    
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            
-            response_data = resp.json()
-            payload = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
-            
-            return float(payload.get("price", payload.get("current_price", 0.0)))
-                
-    except Exception as e:
-        print(f"Price fetch error for {clean_asset}: {str(e)}")
-        
-    return 0.0
-
-async def deduplicate(items: list[dict], db: AsyncSession) -> list[dict]:
-    new_items = []
-    result = await db.execute(select(NewsCache.news_id))
-    seen_ids = set(row[0] for row in result.all())
-
-    for item in items:
-        nid = str(item.get("id"))
-        if nid and nid not in seen_ids:
-            new_items.append(item)
-            db.add(NewsCache(news_id=nid))
-            seen_ids.add(nid)
-            
-    return new_items
-
 def build_prompt(news_batch: list[dict]) -> str:
     articles = []
     for n in news_batch:
@@ -135,7 +24,10 @@ def build_prompt(news_batch: list[dict]) -> str:
             continue
             
         content = n.get("content", "No Content")
-        articles.append(f"- {n.get('title', 'No Title')} (Asset: {asset}) | Content: {content}")
+        sector_tags = n.get("sector_tags", [])
+        sectors_str = ", ".join(sector_tags) if sector_tags else "Uncategorized"
+        
+        articles.append(f"- {n.get('title', 'No Title')} (Asset: {asset} | Sectors: {sectors_str}) | Content: {content}")
         
         if len(articles) >= 10:
             break
@@ -159,7 +51,7 @@ For each article, output a JSON object with:
 - "rationale": a short sentence explaining the autonomous decision (max 150 chars).
 - "source_headline": The exact title of the primary article driving this sentiment.
 
-Return the result as a JSON array of objects, with one object per article.
+Return the result as a JSON object containing a single key "data", which holds an array of these article objects.
 Articles:
 {chr(10).join(articles)}
 """
@@ -193,7 +85,7 @@ def analyze_with_llm(prompt: str) -> list[dict]:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are a precise JSON responder. Always format your response as valid JSON."},
+                {"role": "system", "content": "You are a precise JSON responder. Always format your response as a valid JSON object containing a 'data' array."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.1,
@@ -202,17 +94,32 @@ def analyze_with_llm(prompt: str) -> list[dict]:
         raw = completion.choices[0].message.content
         data = json.loads(raw)
         
-        if isinstance(data, dict) and "articles" in data: return data["articles"]
-        if isinstance(data, list): return data
-        for v in data.values():
-            if isinstance(v, list): return v
-        raise ValueError("Unexpected JSON structure returned from LLM")
-    except Exception:
+        # Robustly extract the list
+        extracted_list = []
+        if isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], list):
+                extracted_list = data["data"]
+            elif "articles" in data and isinstance(data["articles"], list):
+                extracted_list = data["articles"]
+            else:
+                # Fallback: look for ANY list in the dictionary values
+                for v in data.values():
+                    if isinstance(v, list):
+                        extracted_list = v
+                        break
+        
+        # Filter out anything that isn't a dictionary to prevent Pydantic crashes
+        return [item for item in extracted_list if isinstance(item, dict)]
+        
+    except Exception as e:
+        print(f"LLM Parsing Error: {e}")
         return []
 
 def generate_signals(analyses: list[dict]) -> list[dict]:
     signals = []
     for a in analyses:
+        if not isinstance(a, dict):
+            continue # Extra failsafe
         try:
             sa = SentimentAnalysis(**a)
             if sa.confidence >= 80 and sa.sentiment in ("bullish", "bearish"):

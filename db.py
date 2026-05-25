@@ -24,10 +24,6 @@ class User(Base):
     subscription_end = Column(DateTime, nullable=True)
     volatility_guard_threshold = Column(Integer, default=15)
 
-class NewsCache(Base):
-    __tablename__ = "news_cache"
-    news_id = Column(String, primary_key=True, index=True)
-
 class ValueChainAnalytics(Base):
     __tablename__ = "valuechain_analytics"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -40,7 +36,7 @@ class ValueChainAnalytics(Base):
     sodex_routed = Column(Boolean, default=False)
     
     # Backtesting & False-Signal Tracking
-    entry_price = Column(Float, nullable=True)          # NEW: Captures price at signal generation
+    entry_price = Column(Float, nullable=True)
     forward_price_change = Column(Float, nullable=True) 
     pnl_percentage = Column(Float, nullable=True)       
     signal_accuracy = Column(Boolean, nullable=True)    

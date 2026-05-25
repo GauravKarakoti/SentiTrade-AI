@@ -3,6 +3,7 @@ import httpx
 import json
 import time
 import uuid
+import asyncio
 import urllib.parse
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -11,11 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from eth_utils import keccak
 
-from db import init_db, get_db, User, ValueChainAnalytics
+from db import init_db, get_db, AsyncSessionLocal, User, ValueChainAnalytics
 from bot_logic import (
-    fetch_news_from_api, deduplicate, build_prompt, 
-    analyze_with_llm, generate_signals, send_telegram_alert,
-    generate_chat_reply, fetch_asset_volatility, fetch_asset_price
+    build_prompt, analyze_with_llm, generate_signals, 
+    send_telegram_alert, generate_chat_reply
+)
+from sosovalue_client import (
+    fetch_news_from_api, deduplicate_and_categorize, fetch_market_snapshot
 )
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -29,15 +32,30 @@ SSI_CONTRACTS = {
     "USSI": "0x3a46ed8FCeb6eF1ADA2E4600A522AE7e24D2Ed18"
 }
 
+background_tasks = set()
+
+async def background_analysis_loop():
+    """Background task polling news/market-data endpoints every 10 minutes."""
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                await perform_analysis(db)
+        except Exception as e:
+            print(f"Background Loop Error: {e}")
+        
+        await asyncio.sleep(600)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    task = asyncio.create_task(background_analysis_loop())
+    background_tasks.add(task)
     yield
+    task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
 async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
-    """Calculates performance stats for a specific asset from logged analytics."""
     result = await db.execute(
         select(ValueChainAnalytics)
         .filter(ValueChainAnalytics.asset == asset)
@@ -59,7 +77,6 @@ async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
     }
 
 async def backfill_signal_performance(db: AsyncSession):
-    """Evaluates the outcome of signals older than 1 hour to update historical stats."""
     one_hour_ago = datetime.utcnow() - timedelta(hours=1)
     
     result = await db.execute(
@@ -72,26 +89,84 @@ async def backfill_signal_performance(db: AsyncSession):
     pending_signals = result.scalars().all()
     
     for record in pending_signals:
-        current_price = await fetch_asset_price(record.asset)
-        if current_price > 0:
-            price_change = current_price - record.entry_price
-            pnl_pct = (price_change / record.entry_price) * 100
-            
-            # Record Accuracy (Positive PnL on BUY, Negative PnL on SELL equals success)
-            if record.sentiment == "BUY":
-                record.pnl_percentage = pnl_pct
-                record.signal_accuracy = pnl_pct > 0
-            else: # SELL
-                record.pnl_percentage = -pnl_pct
-                record.signal_accuracy = pnl_pct < 0
+        try:
+            market_data = await fetch_market_snapshot(record.asset)
+            current_price = float(market_data.get("price", 0.0))
+            if current_price > 0:
+                price_change = current_price - record.entry_price
+                pnl_pct = (price_change / record.entry_price) * 100
                 
-            record.forward_price_change = price_change
+                if record.sentiment == "BUY":
+                    record.pnl_percentage = pnl_pct
+                    record.signal_accuracy = pnl_pct > 0
+                else: 
+                    record.pnl_percentage = -pnl_pct
+                    record.signal_accuracy = pnl_pct < 0
+                    
+                record.forward_price_change = price_change
+        except Exception:
+            pass # Skips updates if API and Cache are unreachable
             
     if pending_signals:
         await db.commit()
 
+async def perform_analysis(db: AsyncSession):
+    """Core logic to fetch, deduplicate, analyze, and dispatch signals."""
+    await backfill_signal_performance(db)
+
+    news_items = await fetch_news_from_api()
+    new_news = await deduplicate_and_categorize(news_items)
+    if not new_news: return {"status": "no_new_data"}
+
+    analyses = analyze_with_llm(build_prompt(new_news))
+    signals = generate_signals(analyses)
+
+    if signals:
+        result = await db.execute(select(User.chat_id, User.is_subscribed, User.volatility_guard_threshold).filter(User.is_active == True))
+        active_users = result.all()
+        premium_users = [{"chat_id": r[0], "vol_guard": r[2]} for r in active_users if r[1]]
+        free_users = [{"chat_id": r[0], "vol_guard": r[2]} for r in active_users if not r[1]]
+
+        for index, signal in enumerate(signals):
+            try:
+                # If this raises an exception (API and Cache down), it safely aborts signal dispatch ("pauses signals")
+                market_data = await fetch_market_snapshot(signal["asset"])
+                entry_price = float(market_data.get("price", 0.0))
+                volatility = abs(float(market_data.get("change_pct_24h", 0.0)))
+                
+                db.add(ValueChainAnalytics(
+                    asset=signal["asset"],
+                    sentiment=signal["action"],
+                    confidence=signal["confidence"],
+                    rationale=signal["rationale"],
+                    source_article=signal["source_headline"],
+                    entry_price=entry_price
+                ))
+                
+                signal["volatility"] = volatility
+
+                target_users = premium_users.copy()
+                if index == 0: target_users.extend(free_users)
+
+                for user in target_users:
+                    if volatility <= user["vol_guard"]:
+                        await send_telegram_alert(user["chat_id"], signal)
+                        
+            except Exception as e:
+                print(f"Skipping signal for {signal['asset']} due to missing market data: {e}")
+
+        if len(signals) > 1:
+            missed_count = len(signals) - 1
+            upsell_msg = f"🔒 **{missed_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream and premium SoDEX routing alerts."
+            for chat_id in free_users:
+                await send_direct_message(chat_id, upsell_msg)
+    
+    await db.commit()
+    return {"status": "success", "agentic_actions_routed": len(signals)}
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    # ...(Truncated for brevity. Same logic as original)...
     try:
         update = await request.json()
     except Exception:
@@ -173,9 +248,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         "asset": asset,
                         "action": action,
                         "confidence": confidence,
-                        "winRate": stats["winRate"],          # Add this
-                        "avgPnl": stats["avgPnl"],            # Add this
-                        "maxDrawdown": stats["maxDrawdown"]   # Add this
+                        "winRate": stats["winRate"],          
+                        "avgPnl": stats["avgPnl"],            
+                        "maxDrawdown": stats["maxDrawdown"]   
                     })
                     
                     web_app_url = f"{MINI_APP_URL}?{query_params}"
@@ -310,55 +385,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     return {"status": "ok"}
 
 @app.post("/run-analysis")
-async def run_analysis(db: AsyncSession = Depends(get_db)):
+async def run_analysis_endpoint(db: AsyncSession = Depends(get_db)):
+    """Kept as a manual trigger, but delegates execution to the core analysis function."""
     try:
-        # Run the backfilling sweep to evaluate past signal accuracy 
-        await backfill_signal_performance(db)
-
-        news_items = await fetch_news_from_api()
-        new_news = await deduplicate(news_items, db)
-        if not new_news: return {"status": "no_new_data"}
-
-        analyses = analyze_with_llm(build_prompt(new_news))
-        signals = generate_signals(analyses)
-
-        if signals:
-            result = await db.execute(select(User.chat_id, User.is_subscribed, User.volatility_guard_threshold).filter(User.is_active == True))
-            active_users = result.all()
-            premium_users = [{"chat_id": r[0], "vol_guard": r[2]} for r in active_users if r[1]]
-            free_users = [{"chat_id": r[0], "vol_guard": r[2]} for r in active_users if not r[1]]
-
-            for index, signal in enumerate(signals):
-                entry_price = await fetch_asset_price(signal["asset"])
-                
-                db.add(ValueChainAnalytics(
-                    asset=signal["asset"],
-                    sentiment=signal["action"],
-                    confidence=signal["confidence"],
-                    rationale=signal["rationale"],
-                    source_article=signal["source_headline"],
-                    entry_price=entry_price
-                ))
-                
-                volatility = await fetch_asset_volatility(signal["asset"])
-                signal["volatility"] = volatility
-
-                target_users = premium_users.copy()
-                if index == 0: target_users.extend(free_users)
-
-                for user in target_users:
-                    if volatility <= user["vol_guard"]:
-                        await send_telegram_alert(user["chat_id"], signal)
-
-            if len(signals) > 1:
-                missed_count = len(signals) - 1
-                upsell_msg = f"🔒 **{missed_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream and premium SoDEX routing alerts."
-                for chat_id in free_users:
-                    await send_direct_message(chat_id, upsell_msg)
-        
-        await db.commit()
-        return {"status": "success", "agentic_actions_routed": len(signals)}
-
+        return await perform_analysis(db)
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -366,7 +396,6 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
 async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd: float = 100.0) -> dict:
     clean_asset = asset.replace('$', '').upper()
     
-    # Handle the SSI index naming convention for the orderbook
     if clean_asset.endswith('.SSI') or clean_asset == "USSI":
         target_symbol_name = f"v{clean_asset}_vUSDC"
     else:
@@ -383,7 +412,7 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         sodex_account_id = int(state_data["data"]["aid"])
         
         if sodex_account_id == 0:
-            raise ValueError(f"Wallet `{address[:6]}...` is not initialized on SoDEX. Please connect to the SoDEX dApp and deposit funds to activate your trading account first. \n\n 👉 https://sodex.com/")
+            raise ValueError(f"Wallet `{address[:6]}...` is not initialized on SoDEX. Please connect to the SoDEX dApp and deposit funds to activate your trading account first.")
 
         symbols_resp = await client.get(
             f"{SODEX_SPOT_API}/markets/symbols",
@@ -391,7 +420,6 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         )
         
         symbols_data = symbols_resp.json()
-        print(f"SoDEX Symbol Query Response: {symbols_data}")
         
         if symbols_data.get("code") != 0:
             error_text = str(symbols_data.get("error", "")).lower()
