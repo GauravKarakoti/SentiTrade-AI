@@ -142,12 +142,20 @@ def build_prompt(news_batch: list[dict]) -> str:
 
     return f"""
 You are an autonomous SoSoValue Agentic System operating on the ValueChain.
-Analyze the following financial data to provide actionable intelligence for the One-Person economy.
+Analyze the following financial data to provide actionable intelligence.
+
+CRITICAL INSTRUCTION - SSI INDEX INTEGRATION:
+If an article's narrative strongly impacts an entire sector rather than a single asset, you MUST route the signal to the appropriate SoSoValue Index (SSI) token instead of a single coin to achieve passive index investing:
+- Top 7 Market Cap / Broad Market Bull: output "$MAG7.ssi"
+- Meme Coin Sector: output "$MEME.ssi"
+- DeFi Sector: output "$DEFI.ssi"
+- Macro uncertainty / Delta-neutral Hedging: output "$USSI"
+
 For each article, output a JSON object with:
-- "asset": The standard trading ticker symbol with a '$' prefix (e.g., "$TON", "$BTC"). Do NOT use the full token name.
+- "asset": The standard ticker with a '$' prefix (e.g., "$TON") OR the appropriate SSI Index token (e.g., "$MEME.ssi").
 - "sentiment": one of "bullish", "bearish", "neutral"
 - "confidence": integer between 0 and 100
-- "narrative_tags": array of relevant tags (e.g., "AI x Web3", "SoDEX Liquidity")
+- "narrative_tags": array of relevant tags (e.g., "DeFi Index Allocation")
 - "rationale": a short sentence explaining the autonomous decision (max 150 chars).
 - "source_headline": The exact title of the primary article driving this sentiment.
 

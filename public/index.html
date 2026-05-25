@@ -197,7 +197,21 @@
 
             document.getElementById('confidenceValue').innerText = `${txParams.confidence}%`;
             document.getElementById('confidenceBar').style.width = `${txParams.confidence}%`;
-            document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
+
+            // --- NEW SSI INDEX DETECTION LOGIC ---
+            if (txParams.asset.toLowerCase().includes('.ssi') || txParams.asset.toLowerCase() === '$ussi') {
+                const statusBadge = document.getElementById('statusBadge');
+                statusBadge.innerText = "SSI Protocol Index";
+                statusBadge.className = "absolute top-4 right-4 bg-purple-500/10 text-purple-400 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-purple-500/20";
+                
+                const tokenDisplay = document.getElementById('tokenDisplay');
+                tokenDisplay.innerHTML = txParams.asset + ' <span class="text-[10px] bg-purple-500/20 text-purple-300 px-1 rounded ml-1 align-middle">BASKET</span>';
+                
+                document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for the diversified ${txParams.asset} basket based on sector-wide narrative strength.`;
+            } else {
+                document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
+            }
+            // ---------------------------------------
             
             const isSell = txParams.action.toUpperCase() === 'SELL';
             const ssvValue = document.getElementById('ssv-index-value');

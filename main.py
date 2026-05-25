@@ -22,6 +22,13 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MINI_APP_URL = os.getenv("MINI_APP_URL")
 SODEX_SPOT_API = os.getenv("SODEX_SPOT_API", "https://mainnet-gw.sodex.dev/api/v1/spot")
 
+SSI_CONTRACTS = {
+    "MAG7.ssi": "0x9E6A46f294bB67c20F1D1E7AfB0bBEf614403B55",
+    "DEFI.ssi": "0x164ffdaE2fe3891714bc2968f1875ca4fA1079D0",
+    "MEME.ssi": "0xdd3acDBDc7b358Df453a6CB6bCA56C92aA5743aA",
+    "USSI": "0x3a46ed8FCeb6eF1ADA2E4600A522AE7e24D2Ed18"
+}
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
@@ -358,7 +365,12 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
     
 async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd: float = 100.0) -> dict:
     clean_asset = asset.replace('$', '').upper()
-    target_symbol_name = f"v{clean_asset}_vUSDC"
+    
+    # Handle the SSI index naming convention for the orderbook
+    if clean_asset.endswith('.SSI') or clean_asset == "USSI":
+        target_symbol_name = f"v{clean_asset}_vUSDC"
+    else:
+        target_symbol_name = f"v{clean_asset}_vUSDC"
     
     async with httpx.AsyncClient(timeout=15.0) as client:
         state_resp = await client.get(f"{SODEX_SPOT_API}/accounts/{address}/state")
