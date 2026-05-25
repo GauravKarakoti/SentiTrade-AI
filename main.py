@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 import urllib.parse
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +15,7 @@ from db import init_db, get_db, User, ValueChainAnalytics
 from bot_logic import (
     fetch_news_from_api, deduplicate, build_prompt, 
     analyze_with_llm, generate_signals, send_telegram_alert,
-    generate_chat_reply, fetch_asset_volatility
+    generate_chat_reply, fetch_asset_volatility, fetch_asset_price
 )
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -50,6 +51,38 @@ async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
         "maxDrawdown": f"{min([r.pnl_percentage or 0 for r in records]):.2f}%"
     }
 
+async def backfill_signal_performance(db: AsyncSession):
+    """Evaluates the outcome of signals older than 1 hour to update historical stats."""
+    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+    
+    result = await db.execute(
+        select(ValueChainAnalytics)
+        .filter(ValueChainAnalytics.signal_accuracy == None)
+        .filter(ValueChainAnalytics.entry_price != None)
+        .filter(ValueChainAnalytics.entry_price > 0)
+        .filter(ValueChainAnalytics.timestamp <= one_hour_ago)
+    )
+    pending_signals = result.scalars().all()
+    
+    for record in pending_signals:
+        current_price = await fetch_asset_price(record.asset)
+        if current_price > 0:
+            price_change = current_price - record.entry_price
+            pnl_pct = (price_change / record.entry_price) * 100
+            
+            # Record Accuracy (Positive PnL on BUY, Negative PnL on SELL equals success)
+            if record.sentiment == "BUY":
+                record.pnl_percentage = pnl_pct
+                record.signal_accuracy = pnl_pct > 0
+            else: # SELL
+                record.pnl_percentage = -pnl_pct
+                record.signal_accuracy = pnl_pct < 0
+                
+            record.forward_price_change = price_change
+            
+    if pending_signals:
+        await db.commit()
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     try:
@@ -71,14 +104,12 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         elif data.startswith("approve_"):
             parts = data.split("_")
             asset = parts[1]
-            # Ensure asset has the '$' prefix for consistency
             formatted_asset = f"${asset}"
             action = parts[2] if len(parts) > 2 else "BUY"
             confidence = parts[3] if len(parts) > 3 else "80"
             
             await answer_callback_query(callback_id, "Initializing Routing...")
             
-            # Fetch REAL performance stats
             stats = await get_historical_performance(db, formatted_asset)
 
             query_params = urllib.parse.urlencode({
@@ -114,19 +145,15 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             if status == "connected":
                 user_address = web_app_payload.get("address")
                 asset = web_app_payload.get("asset", "Unknown")
-                
-                # Extract action and confidence from the frontend payload
                 action = web_app_payload.get("action", "BUY")
                 confidence = web_app_payload.get("confidence", "80")
                 
                 await send_direct_message(chat_id, f"⏳ **Analyzing ValueChain...**\nPreparing AI-driven SoDEX order for {asset}.")
                 
                 try:
-                    # Pass the dynamic action instead of hardcoding "BUY"
                     order_data = await prepare_sodex_order(asset=asset, action=action, address=user_address)
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
 
-                    # Add asset, action, and confidence to the query parameters
                     query_params = urllib.parse.urlencode({
                         "intent": "sign_sodex",
                         "hash": order_data["payload_hash"],
@@ -142,14 +169,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     web_app_url = f"{MINI_APP_URL}?{query_params}"
                     
                     keyboard = {
-                        "keyboard": [
-                            [
-                                {
-                                    "text": f"🔐 Authorize Agentic Trade", 
-                                    "web_app": {"url": web_app_url}
-                                }
-                            ]
-                        ],
+                        "keyboard": [[{"text": f"🔐 Authorize Agentic Trade", "web_app": {"url": web_app_url}}]],
                         "resize_keyboard": True,
                         "one_time_keyboard": True
                     }
@@ -164,7 +184,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 signature = web_app_payload.get("signature", "")
                 raw_payload = web_app_payload.get("payload")
                 user_address = web_app_payload.get("address")
-                
                 original_nonce = str(web_app_payload.get("nonce"))
 
                 if signature.startswith("0x01"):
@@ -182,27 +201,19 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     "X-API-Nonce": original_nonce
                 }
 
-                # RESTORE the param extraction! 
                 parsed_payload = json.loads(raw_payload)
                 request_body = json.dumps(parsed_payload["params"], separators=(',', ':'))
 
                 async with httpx.AsyncClient() as client:
-                    resp = await client.post(
-                        f"{SODEX_SPOT_API}/trade/orders/batch", 
-                        content=request_body, 
-                        headers=headers
-                    )
-                    
+                    resp = await client.post(f"{SODEX_SPOT_API}/trade/orders/batch", content=request_body, headers=headers)
                     resp_data = resp.json()
                     
                     if resp.status_code == 200 and resp_data.get("data", [{}])[0].get("code") == 0:
                         order_id = resp_data["data"][0].get("orderID", "Unknown")
-                        
                         remove_keyboard = {"remove_keyboard": True}
                         await send_direct_message(chat_id, f"🎉 **Intelligent Trade Executed!**\nSoDEX Order ID: `{order_id}`\n\n*Welcome to the future of finance.*", reply_markup=remove_keyboard)
                     else:
                         error_detail = resp_data.get("data", [{}])[0].get("error", resp.text)
-                        
                         remove_keyboard = {"remove_keyboard": True}
                         await send_direct_message(chat_id, f"❌ **SoDEX Execution Failed:**\n`{error_detail}`", reply_markup=remove_keyboard)
                         
@@ -261,7 +272,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
             if user:
-                # TODO: In Wave 3, we'd add actual payment subscriptions
                 user.is_subscribed = True 
                 await db.commit()
                 await send_direct_message(chat_id, "🎉 **Subscription Activated!** You will now receive agentic SoDEX trade signals.")
@@ -290,6 +300,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 @app.post("/run-analysis")
 async def run_analysis(db: AsyncSession = Depends(get_db)):
     try:
+        # Run the backfilling sweep to evaluate past signal accuracy 
+        await backfill_signal_performance(db)
+
         news_items = await fetch_news_from_api()
         new_news = await deduplicate(news_items, db)
         if not new_news: return {"status": "no_new_data"}
@@ -304,12 +317,15 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
             free_users = [{"chat_id": r[0], "vol_guard": r[2]} for r in active_users if not r[1]]
 
             for index, signal in enumerate(signals):
+                entry_price = await fetch_asset_price(signal["asset"])
+                
                 db.add(ValueChainAnalytics(
                     asset=signal["asset"],
                     sentiment=signal["action"],
                     confidence=signal["confidence"],
                     rationale=signal["rationale"],
-                    source_article=signal["source_headline"] # Logged for false-signal analysis
+                    source_article=signal["source_headline"],
+                    entry_price=entry_price
                 ))
                 
                 volatility = await fetch_asset_volatility(signal["asset"])
@@ -322,7 +338,6 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
                     if volatility <= user["vol_guard"]:
                         await send_telegram_alert(user["chat_id"], signal)
 
-            # Optional Upsell: Notify free users about the signals they missed
             if len(signals) > 1:
                 missed_count = len(signals) - 1
                 upsell_msg = f"🔒 **{missed_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream and premium SoDEX routing alerts."
@@ -337,8 +352,6 @@ async def run_analysis(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
     
 async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd: float = 100.0) -> dict:
-    """Prepares the SoDEX order payload and hash for EIP-712 signing."""
-    
     clean_asset = asset.replace('$', '').upper()
     target_symbol_name = f"v{clean_asset}_vUSDC"
     
@@ -393,7 +406,6 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
     }
     
     if action == "BUY":
-        # Format decimal cleanly and enforce string type
         order_item["funds"] = f"{float(amount_usd):.2f}".rstrip('0').rstrip('.') 
     else:
         order_item["quantity"] = "1"
@@ -406,11 +418,8 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         }
     }
     
-    # 5. Compact JSON with no spaces
     compact_json = json.dumps(payload, separators=(',', ':'))
     payload_hash = "0x" + keccak(text=compact_json).hex()
-    
-    # This nonce is for the signing generation context
     nonce = int(time.time() * 1000) 
     
     return {

@@ -38,7 +38,9 @@ class ValueChainAnalytics(Base):
     source_article = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     sodex_routed = Column(Boolean, default=False)
+    
     # Backtesting & False-Signal Tracking
+    entry_price = Column(Float, nullable=True)          # NEW: Captures price at signal generation
     forward_price_change = Column(Float, nullable=True) 
     pnl_percentage = Column(Float, nullable=True)       
     signal_accuracy = Column(Boolean, nullable=True)    

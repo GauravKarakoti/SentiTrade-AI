@@ -36,7 +36,6 @@ async def fetch_news_from_api() -> list[dict]:
     return data.get("list", []) if isinstance(data, dict) else []
 
 async def fetch_currency_id(asset: str) -> str:
-    """Fetches the SoSoValue currency_id for a given asset symbol."""
     if not SOSOVALUE_API_KEY:
         return ""
 
@@ -49,7 +48,6 @@ async def fetch_currency_id(asset: str) -> str:
             resp.raise_for_status()
             
             response_data = resp.json()
-            # Handle potential 'data' wrapper just in case the API uses it
             currencies = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
             
             if isinstance(currencies, list):
@@ -66,7 +64,6 @@ async def fetch_asset_volatility(asset: str) -> float:
     if not SOSOVALUE_API_KEY:
         return 0.0
     
-
     clean_asset = asset.replace("$", "").upper()
     cid = await fetch_currency_id(clean_asset)
     headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
@@ -78,17 +75,40 @@ async def fetch_asset_volatility(asset: str) -> float:
             resp.raise_for_status()
             
             response_data = resp.json()
-            
-            # Extract the payload, handling a potential top-level 'data' wrapper just in case
             payload = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
-            
             vol_value = payload.get("change_pct_24h", 0.0)
-            
-            # Return the absolute percentage to represent overall volatility magnitude
             return abs(float(vol_value))
                 
     except Exception as e:
         print(f"Volatility fetch error for {clean_asset}: {str(e)}")
+        
+    return 0.0
+
+# NEW: Price fetching logic
+async def fetch_asset_price(asset: str) -> float:
+    if not SOSOVALUE_API_KEY:
+        return 0.0
+    
+    clean_asset = asset.replace("$", "").upper()
+    cid = await fetch_currency_id(clean_asset)
+    if not cid:
+        return 0.0
+        
+    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
+    url = f"{SOSOVALUE_BASE_URL}/v1/currencies/{cid}/market-snapshot"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            
+            response_data = resp.json()
+            payload = response_data.get("data", response_data) if isinstance(response_data, dict) else response_data
+            
+            return float(payload.get("price", payload.get("current_price", 0.0)))
+                
+    except Exception as e:
+        print(f"Price fetch error for {clean_asset}: {str(e)}")
         
     return 0.0
 
@@ -111,15 +131,12 @@ def build_prompt(news_batch: list[dict]) -> str:
     for n in news_batch:
         matched = n.get("matched_currencies")
         asset = matched[0].get("symbol", matched[0].get("name", "N/A")) if matched and isinstance(matched, list) else "N/A"
-        
-        # Skip the news item if no valid asset is found
         if asset == "N/A":
             continue
             
         content = n.get("content", "No Content")
         articles.append(f"- {n.get('title', 'No Title')} (Asset: {asset}) | Content: {content}")
         
-        # Stop once we have 10 valid actionable articles
         if len(articles) >= 10:
             break
 
@@ -209,21 +226,17 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     clean_asset = signal['asset'].replace("$", "")
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # Calculate Risk-Adjusted Confidence
     volatility = signal.get('volatility', 0.0)
     risk_penalty = int(volatility * 0.5) 
     adjusted_confidence = max(0, signal['confidence'] - risk_penalty)
     
-    # Generate a visual confidence bar
     filled_blocks = int(adjusted_confidence / 10)
     empty_blocks = 10 - filled_blocks
     confidence_bar = "🟩" * filled_blocks + "⬜" * empty_blocks
     
-    # Visual cues for action
     action_emoji = "🟢 BUY" if signal['action'].upper() == "BUY" else "🔴 SELL"
     volatility_formatted = f"{volatility:.2f}%"
     
-    # Route approval via adjusted confidence
     callback_data_approve = f"approve_{clean_asset}_{signal['action']}_{adjusted_confidence}"
     
     keyboard = {
@@ -241,7 +254,6 @@ async def send_telegram_alert(chat_id: int, signal: dict):
         ]
     }
     
-    # Upgraded Markdown Message
     alert_text = (
         f"🧠 **ValueChain AI Intelligence**\n\n"
         f"**Asset:** {signal['asset']}\n"
