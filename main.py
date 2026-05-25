@@ -154,6 +154,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     order_data = await prepare_sodex_order(asset=asset, action=action, address=user_address)
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
 
+                    stats = await get_historical_performance(db, asset)
+
                     query_params = urllib.parse.urlencode({
                         "intent": "sign_sodex",
                         "hash": order_data["payload_hash"],
@@ -163,7 +165,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         "sodexChainId": sodex_chain_id,
                         "asset": asset,
                         "action": action,
-                        "confidence": confidence
+                        "confidence": confidence,
+                        "winRate": stats["winRate"],          # Add this
+                        "avgPnl": stats["avgPnl"],            # Add this
+                        "maxDrawdown": stats["maxDrawdown"]   # Add this
                     })
                     
                     web_app_url = f"{MINI_APP_URL}?{query_params}"
