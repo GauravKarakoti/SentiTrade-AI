@@ -1,12 +1,14 @@
-# SentiTrade-AI: The Agentic Gateway to Intelligent Finance 🧠🌐
+# SentiTrade-AI: The Agentic Finance & Strategy Assistant 🧠🌐
 
 **Market Narratives, Autonomously Analyzed. Executed at the Speed of AI.**
 
-SoSoValue is redefining how we interact with financial data in the Web3 era. SentiTrade-AI stands at the intersection of **AI x Web3**, acting as an intelligent agentic system that transforms raw blockchain data into actionable intelligence. By integrating decentralized exchange capabilities with AI-driven insights, this platform empowers the **One-Person economy** to build, scale, and navigate on-chain finance with precision.
+Most platforms provide data and expect you to figure out the rest. SentiTrade-AI is built differently. It stands at the intersection of **AI x Web3**, acting as a real agentic finance application that transforms raw blockchain data into actionable intelligence. 
+
+Moving beyond traditional dashboards, this platform serves as your personal **research terminal, strategy assistant, and automated trading tool**. By integrating the SoSoValue ecosystem with AI-driven insights, it empowers the **One-Person economy** to make confident decisions, discover opportunities, and automate workflows from insight to execution.
 
 ## 📖 Overview
 
-SentiTrade AI continuously monitors structured crypto news and market data from the SoSoValue terminal, uses a large language model to extract sentiment and narrative strength, and automatically executes trades on the SoDEX orderbook. It includes:
+SentiTrade-AI continuously monitors structured crypto news and market data, uses a large language model to extract sentiment and narrative strength, and safely executes trades on the SoDEX orderbook. It includes:
 
 At the heart of SentiTrade-AI lies the **ValueChain**—a seamless ecosystem where data flows efficiently across decentralized systems. This agent goes beyond traditional limitations:
 - **Agentic Analysis:** Continuously monitors structured crypto news and market data from the SoSoValue terminal, autonomously analyzing sentiment and narrative strength.
@@ -15,19 +17,27 @@ At the heart of SentiTrade-AI lies the **ValueChain**—a seamless ecosystem whe
 - **One-Person Empowerment:** A Web Dashboard and Telegram Bot providing institutional-level research and autonomous execution for individual operators.
 - **Premium Signal Subscriptions:** Monetized access to high-confidence trade signals, gated via monthly subscription logic, allowing creators to generate recurring revenue.
 
+## 📖 Core Value & Architecture
+
+We deliver **real user value** by emphasizing complete workflows:
+- **AI Integration (Insight & Discovery):** Continuously monitors the SoSoValue terminal, autonomously analyzing sentiment and narrative strength to discover hidden market opportunities.
+- **Risk Management at the Core:** Built-in 24h volatility guards and historical backtesting metrics ensure that capital is protected before routing any signal.
+- **Complete Workflows (Insight to Execution):** Seamlessly handles real-time data from the ValueChain, translates it into high-confidence signals, and executes securely on the SoDEX orderbook with a single click.
+- **Working Demos for Solo Builders:** A fully functional Web Dashboard and Telegram Bot providing institutional-level research and autonomous execution for individual operators.
+
 ## 🎯 Target Users & Business Model
 
-Solo crypto traders, small funds, and DeFi enthusiasts. 
+Solo crypto traders, small funds, and DeFi enthusiasts who need an intelligent strategy assistant rather than just another data feed.
 
-**Monetization:** Operates as a SaaS via Telegram, charging users a monthly subscription fee (in crypto or fiat) to access real-time AI signal alerts and 1-click SoDEX routing.
+**Monetization:** Operates as a SaaS via Telegram, charging users a monthly subscription fee to access real-time AI signal alerts and 1-click SoDEX routing.
 
-## 🔁 Core Agentic Workflow 
+## 🔁 Complete Agentic Workflow 
 
-1. **ValueChain Data Input** – Fetch curated news and live prices from the SoSoValue API.
-2. **Autonomous AI Engine** – LLMs act, analyze, and assist by classifying sentiment and narrative tags autonomously.
-3. **Actionable Intelligence** – Translates narrative conviction into high-confidence SoDEX trade signals.
+1. **Insight Generation** – Fetch curated news and live prices from the SoSoValue API.
+2. **AI Strategy Assistant** – Groq-powered LLMs classify sentiment and narrative tags autonomously.
+3. **Risk Management** – Filters signals against user-defined volatility thresholds.
 4. **On-Chain Execution** – Agent routes and places buy/sell orders securely on SoDEX.
-5. **Continuous Learning** – Stores analytics back into the ValueChain for future reference.
+5. **Continuous Learning** – Stores analytics and PnL back into the ValueChain for historical backtesting.
 
 ## 🧩 APIs & Infrastructure
 
@@ -36,11 +46,11 @@ Solo crypto traders, small funds, and DeFi enthusiasts.
 | SoSoValue API      | `GET /v1/news/list` – ValueChain data feed  |
 | SoSoValue API      | `GET /v1/coins/market-data` – Analytics     |
 | SoDEX API          | `POST /order` – Intelligent trade routing   |
-| AI Model           | Groq / Llama 3.3 (Agentic processing)       |
+| AI Model           | Groq (Agentic processing)                   |
 
 ## 🏗️ Tech Stack
 
-- **Backend:** Python 3.14, FastAPI
+- **Backend:** Python 3.11+, FastAPI
 - **AI:** Groq
 - **Blockchain:** SoSoValue, SoDEX
 - **Database:** PostgreSQL (trades, signals)
@@ -56,20 +66,11 @@ cd sentitrade-ai
 ```
 
 ### 2. Environment variables
-Copy `.env.example` to `.env` and fill in:
-```text
-SOSOVALUE_API_KEY=your_soso_key
-GROQ_API_KEY=your_groq_key
-TELEGRAM_BOT_TOKEN=...
-DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/sentitrade
-MINI_APP_URL=[https://your-domain.com](https://your-domain.com)
-SODEX_SPOT_API=[https://mainnet-gw.sodex.dev/api/v1/spot](https://mainnet-gw.sodex.dev/api/v1/spot)
-```
+Copy `.env.example` to `.env` and configure your API keys.
 
 ### 3. Run the Ecosystem
 ```bash
 uvicorn main:app --host 0.0000 --port 8000 --reload
-
 ngrok http 8000
 ```
 - This starts the API server, background worker, Redis, and PostgreSQL.
@@ -78,10 +79,10 @@ ngrok http 8000
 ### 4. Access the dashboard
 Interact with the agent via Telegram at `t.me/SentiTradeAIBot`.
 
-## 🧪 Wave Progress
-- Wave 1 (Concept): Defined user flows, data schema, AI prompt design, and SoSoValue API integration plan.
-- Wave 2 (Build): Implemented core sentiment engine, SoSoValue API connector, SoDEX execution module, and working prototype dashboard.
-- Wave 3 (Build): Refined risk controls, UX polish, Telegram bot addition, stress testing, and final submission.
+## 🧪 Wave Progress & Step-by-Step Build
+- Wave 1 (Concept & Strategy): Defined user flows, data schema, AI prompt design, and SoSoValue API integration plan.
+- Wave 2 (Insight Integration): Implemented core sentiment engine using Groq, SoSoValue API connector, and working prototype dashboard.
+- Wave 3 (Execution & Polish): Built complete workflows from insight to execution, refined risk controls (volatility guards), Telegram bot addition, and stress testing the SoDEX routing.
 
 ## 🛡️ Disclaimer
 SentiTrade-AI is an experimental agentic system. The future of finance is intelligent, decentralized, and user-driven. Always test on testnet first.

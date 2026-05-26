@@ -321,18 +321,18 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 await db.commit()
                 welcome_message = (
                     "🤖 **Welcome to SentiTrade-AI!**\n\n"
-                    "I am your agentic gateway to intelligent finance. I analyze market narratives and help you execute trades seamlessly.\n\n"
-                    "**Here is how to get started:**\n"
-                    "1️⃣ **Wait for Signals:** I will automatically send you AI-analyzed trade signals based on real-time news.\n"
-                    "2️⃣ **Manage Risk:** Use `/volatility 15` to set your maximum volatility guard (default is 15%). Signals above this threshold are blocked.\n"
-                    "3️⃣ **Execute Trades:** When you receive a signal, click 'Route via SoDEX' to securely authorize the trade via our MiniApp.\n\n"
-                    "Use `/subscribe` anytime to unlock premium features and faster alerts!"
+                    "I am your agentic research terminal and strategy assistant. I don't just display data I help you make decisions, discover opportunities, and automate workflows from insight to execution.\n\n"
+                    "**Core Workflows:**\n"
+                    "1️⃣ **AI Discovery (Insight):** I continuously analyze SoSoValue market narratives to spot high-value opportunities.\n"
+                    "2️⃣ **Risk Management:** Use `/volatility 15` to set a strict volatility guard and protect your downside from market swings.\n"
+                    "3️⃣ **Automated Execution:** When an opportunity is discovered, click 'Route via SoDEX' to authorize the trade securely in seconds.\n\n"
+                    "Let's build intelligent portfolios together. Use `/subscribe` to unlock the full ValueChain workflow!"
                 )
                 await send_direct_message(chat_id, welcome_message)
             else:
                 user.is_active = True
                 await db.commit()
-                await send_direct_message(chat_id, "Agentic alerts reactivated. Use /subscribe to unlock premium SoDEX routing alerts.")
+                await send_direct_message(chat_id, "Agentic alerts reactivated. Your strategy assistant is back online.")
         
         elif text == "/help":
             help_message = (
