@@ -321,12 +321,12 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 await db.commit()
                 welcome_message = (
                     "🤖 **Welcome to SentiTrade-AI!**\n\n"
-                    "I am your agentic research terminal and strategy assistant. I don't just display data I help you make decisions, discover opportunities, and automate workflows from insight to execution.\n\n"
+                    "Built for the **SoSoValue Buildathon**, I am your agentic research terminal and strategy assistant. I don't just display data—I provide a complete **research-to-execution** ecosystem to help you discover opportunities and automate quant workflows.\n\n"
                     "**Core Workflows:**\n"
-                    "1️⃣ **AI Discovery (Insight):** I continuously analyze SoSoValue market narratives to spot high-value opportunities.\n"
+                    "1️⃣ **Structured AI Discovery:** I continuously analyze SoSoValue market narratives to spot high-value opportunities.\n"
                     "2️⃣ **Risk Management:** Use `/volatility 15` to set a strict volatility guard and protect your downside from market swings.\n"
-                    "3️⃣ **Automated Execution:** When an opportunity is discovered, click 'Route via SoDEX' to authorize the trade securely in seconds.\n\n"
-                    "Let's build intelligent portfolios together. Use `/subscribe` to unlock the full ValueChain workflow!"
+                    "3️⃣ **High-Performance Execution:** When an opportunity is discovered, click 'Route via SoDEX' to authorize the trade securely on-chain in seconds.\n\n"
+                    "Let's build intelligent portfolios together. Use `/subscribe` to unlock the full workflow!"
                 )
                 await send_direct_message(chat_id, welcome_message)
             else:
