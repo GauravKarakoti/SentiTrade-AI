@@ -368,7 +368,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             user = result.scalar_one_or_none()
             if user:
                 try:
-                    new_threshold = int(text.split(" ")[1])
+                    new_threshold = float(text.split(" ")[1])
                     user.volatility_guard_threshold = new_threshold
                     await db.commit()
                     await send_direct_message(
