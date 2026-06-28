@@ -12,6 +12,7 @@
 
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { background-color: #0b0f19; color: #f8fafc; font-family: 'Inter', sans-serif; }
         .gradient-text { background: linear-gradient(135deg, #00f2fe, #4facfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -39,13 +40,35 @@
             Pending Action
         </div>
 
-        <div class="mt-2 space-y-5">
-            <div>
+        <div class="mt-2 space-y-5" id="mainContentBlock">
+            <div id="intentHeader">
                 <p class="text-slate-400 text-xs uppercase tracking-wider mb-1" id="actionLabel">Intent</p>
                 <div class="flex items-baseline space-x-2">
                     <span class="text-3xl font-bold text-white" id="amountDisplay">Authorize</span>
                     <span class="text-lg text-slate-300 font-medium" id="tokenDisplay">Trade</span>
                 </div>
+            </div>
+
+            <div id="dashboardContainer" class="hidden space-y-4 fade-in">
+                <div class="grid grid-cols-2 gap-2 text-center">
+                    <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+                        <span class="block text-[10px] text-slate-400 uppercase tracking-widest">Total ROI</span>
+                        <span id="globalRoi" class="text-xl font-bold text-emerald-400">--%</span>
+                    </div>
+                    <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+                        <span class="block text-[10px] text-slate-400 uppercase tracking-widest">Win Rate</span>
+                        <span id="globalWinRate" class="text-xl font-bold text-cyan-400">--%</span>
+                    </div>
+                    <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 col-span-2">
+                        <span class="block text-[10px] text-slate-400 uppercase tracking-widest">Max Drawdown</span>
+                        <span id="globalDrawdown" class="text-lg font-bold text-red-400">--%</span>
+                    </div>
+                </div>
+                <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+                    <span class="block text-[10px] text-slate-400 uppercase tracking-widest mb-2">Simulated Equity Curve ($)</span>
+                    <canvas id="equityChart" height="150"></canvas>
+                </div>
+                <p class="text-[10px] text-slate-500 text-center mt-2">Curve simulates a $1,000 starting portfolio risking 10% per signal.</p>
             </div>
 
             <div id="historicalContextCard" class="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3 hidden">
@@ -104,9 +127,9 @@
                 </p>
             </div>
 
-            <div class="h-px bg-slate-800 w-full"></div>
+            <div class="h-px bg-slate-800 w-full execution-ui"></div>
 
-            <div class="space-y-2">
+            <div class="space-y-2 execution-ui">
                 <div class="flex justify-between items-center text-xs">
                     <span class="text-slate-500">Target Protocol</span>
                     <span class="text-slate-300 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-blue-500"></span> SoDEX Spot</span>
@@ -122,24 +145,24 @@
             </div>
         </div>
 
-        <div id="riskWarning" class="mt-4 bg-orange-500/10 border border-orange-500/20 rounded-lg p-3 hidden">
+        <div id="riskWarning" class="mt-4 bg-orange-500/10 border border-orange-500/20 rounded-lg p-3 hidden execution-ui">
             <p class="text-[10px] text-orange-400 leading-tight">
                 ⚠️ <span class="font-bold uppercase">Risk Warning:</span> Sentiment signals are highly volatile. Historical performance does not guarantee future results. Proceed only if this aligns with your risk tolerance.
             </p>
         </div>
 
-        <div class="mt-4 mb-4 text-center">
+        <div class="mt-4 mb-4 text-center execution-ui">
             <p class="text-[11px] text-slate-400">
                 🔒 SentiTrade uses secure, gasless off-chain signatures. Connect your wallet to link your existing SoDEX account. We cannot access your funds.
             </p>
         </div>
 
         <div class="mt-6 space-y-3">
-            <button id="btnAction" class="btn-primary w-full py-3.5 rounded-xl font-bold text-sm flex justify-center items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none">
+            <button id="btnAction" class="btn-primary w-full py-3.5 rounded-xl font-bold text-sm flex justify-center items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none execution-ui">
                 <span>Connect Wallet</span>
             </button>
             
-            <button id="btnDisconnect" class="w-full py-2 text-slate-500 text-xs hover:text-slate-300 transition hidden">
+            <button id="btnDisconnect" class="w-full py-2 text-slate-500 text-xs hover:text-slate-300 transition hidden execution-ui">
                 Disconnect
             </button>
         </div>
@@ -182,7 +205,7 @@
             winRate: urlParams.get('winRate'),
             avgPnl: urlParams.get('avgPnl'),
             maxDrawdown: urlParams.get('maxDrawdown'),
-            rationale: urlParams.get('rationale') // NEW param imported
+            rationale: urlParams.get('rationale') 
         };
 
         const elActionLabel = document.getElementById('actionLabel');
@@ -192,72 +215,123 @@
         const aiCard = document.getElementById('aiIntelligenceCard');
         const ssvIndex = document.getElementById('sosovalue-index');
 
-        if (txParams.asset !== 'Unknown') {
-            aiCard.style.display = 'block';
-            ssvIndex.style.display = 'block';
-            document.getElementById('historicalContextCard').style.display = 'block';
-            document.getElementById('riskWarning').style.display = 'block';
+        // DASHBOARD MODE LOGIC
+        if (txParams.intent === 'dashboard') {
+            document.querySelectorAll('.execution-ui').forEach(el => el.style.display = 'none');
+            document.getElementById('intentHeader').style.display = 'none';
+            document.getElementById('dashboardContainer').classList.remove('hidden');
             
-            if(txParams.rationale) {
-                document.getElementById('aiLogicCard').style.display = 'block';
-                document.getElementById('detailedRationale').innerText = txParams.rationale;
-            }
+            const statusBadge = document.getElementById('statusBadge');
+            statusBadge.innerText = "Live Metrics";
+            statusBadge.className = "absolute top-4 right-4 bg-blue-500/10 text-blue-400 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-blue-500/20";
             
-            if(txParams.winRate) document.getElementById('statWinRate').innerText = txParams.winRate;
-            if(txParams.avgPnl) document.getElementById('statAvgPnl').innerText = txParams.avgPnl;
-            if(txParams.maxDrawdown) document.getElementById('statDrawdown').innerText = txParams.maxDrawdown;
-
-            document.getElementById('confidenceValue').innerText = `${txParams.confidence}%`;
-            document.getElementById('confidenceBar').style.width = `${txParams.confidence}%`;
-
-            // --- SSI INDEX DETECTION LOGIC ---
-            if (txParams.asset.toLowerCase().includes('.ssi') || txParams.asset.toLowerCase() === '$ussi') {
-                const statusBadge = document.getElementById('statusBadge');
-                statusBadge.innerText = "SSI Protocol Index";
-                statusBadge.className = "absolute top-4 right-4 bg-purple-500/10 text-purple-400 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-purple-500/20";
+            fetch('/api/metrics')
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('globalRoi').innerText = data.kpis.roi.toFixed(2) + '%';
+                    document.getElementById('globalWinRate').innerText = data.kpis.win_rate.toFixed(2) + '%';
+                    document.getElementById('globalDrawdown').innerText = data.kpis.max_drawdown.toFixed(2) + '%';
+                    
+                    const ctx = document.getElementById('equityChart').getContext('2d');
+                    new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: data.equity_curve.map((_, i) => `T+${i}`),
+                            datasets: [{
+                                label: 'Simulated Equity ($)',
+                                data: data.equity_curve,
+                                borderColor: '#4facfe',
+                                backgroundColor: 'rgba(79, 172, 254, 0.1)',
+                                borderWidth: 2,
+                                fill: true,
+                                pointRadius: 1,
+                                tension: 0.2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: { legend: { display: false } },
+                            scales: { 
+                                x: { display: false },
+                                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { size: 9 } } }
+                            }
+                        }
+                    });
+                })
+                .catch(err => {
+                    document.getElementById('statusText').innerText = "Failed to load metrics.";
+                    console.error(err);
+                });
+        } 
+        // REGULAR EXECUTION LOGIC
+        else {
+            if (txParams.asset !== 'Unknown') {
+                aiCard.style.display = 'block';
+                ssvIndex.style.display = 'block';
+                document.getElementById('historicalContextCard').style.display = 'block';
+                document.getElementById('riskWarning').style.display = 'block';
                 
-                const tokenDisplay = document.getElementById('tokenDisplay');
-                tokenDisplay.innerHTML = txParams.asset + ' <span class="text-[10px] bg-purple-500/20 text-purple-300 px-1 rounded ml-1 align-middle">BASKET</span>';
+                if(txParams.rationale) {
+                    document.getElementById('aiLogicCard').style.display = 'block';
+                    document.getElementById('detailedRationale').innerText = txParams.rationale;
+                }
                 
-                document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for the diversified ${txParams.asset} basket based on sector-wide narrative strength.`;
-            } else {
-                document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
-            }
-            
-            const isSell = txParams.action.toUpperCase() === 'SELL';
-            const ssvValue = document.getElementById('ssv-index-value');
+                if(txParams.winRate) document.getElementById('statWinRate').innerText = txParams.winRate;
+                if(txParams.avgPnl) document.getElementById('statAvgPnl').innerText = txParams.avgPnl;
+                if(txParams.maxDrawdown) document.getElementById('statDrawdown').innerText = txParams.maxDrawdown;
 
-            if(isSell) {
-                document.getElementById('confidenceBar').classList.replace('from-cyan-500', 'from-red-500');
-                document.getElementById('confidenceBar').classList.replace('to-blue-500', 'to-orange-500');
-                document.getElementById('confidenceValue').classList.replace('text-cyan-400', 'text-red-400');
-                ssvValue.innerText = 'Bearish Bias';
-                ssvValue.className = 'text-xs font-bold text-red-400';
-                document.getElementById('ssv-bear').classList.replace('bg-red-500/10', 'bg-red-500/80');
-                document.getElementById('ssv-bear').classList.add('shadow-[0_0_12px_rgba(239,68,68,0.4)]');
-            } else {
-                ssvValue.innerText = 'Bullish Conviction';
-                ssvValue.className = 'text-xs font-bold text-emerald-400';
-                document.getElementById('ssv-bull').classList.replace('bg-emerald-500/10', 'bg-emerald-500/80');
-                document.getElementById('ssv-bull').classList.add('shadow-[0_0_12px_rgba(16,185,129,0.4)]');
-            }
-        }
+                document.getElementById('confidenceValue').innerText = `${txParams.confidence}%`;
+                document.getElementById('confidenceBar').style.width = `${txParams.confidence}%`;
 
-        if (txParams.intent === 'sign_sodex') {
-             elActionLabel.innerText = "Authorize Execution";
-             elAmountDisplay.innerText = txParams.action;
-             elTokenDisplay.innerText = txParams.asset;
-             btnAction.innerText = "Sign & Execute";
-        } else if (txParams.intent === 'connect') {
-             elActionLabel.innerText = "Target Asset";
-             elAmountDisplay.innerText = "Connect";
-             elTokenDisplay.innerText = txParams.asset;
+                // SSI INDEX DETECTION
+                if (txParams.asset.toLowerCase().includes('.ssi') || txParams.asset.toLowerCase() === '$ussi') {
+                    const statusBadge = document.getElementById('statusBadge');
+                    statusBadge.innerText = "SSI Protocol Index";
+                    statusBadge.className = "absolute top-4 right-4 bg-purple-500/10 text-purple-400 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-purple-500/20";
+                    
+                    const tokenDisplay = document.getElementById('tokenDisplay');
+                    tokenDisplay.innerHTML = txParams.asset + ' <span class="text-[10px] bg-purple-500/20 text-purple-300 px-1 rounded ml-1 align-middle">BASKET</span>';
+                    
+                    document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for the diversified ${txParams.asset} basket based on sector-wide narrative strength.`;
+                } else {
+                    document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
+                }
+                
+                const isSell = txParams.action.toUpperCase() === 'SELL';
+                const ssvValue = document.getElementById('ssv-index-value');
+
+                if(isSell) {
+                    document.getElementById('confidenceBar').classList.replace('from-cyan-500', 'from-red-500');
+                    document.getElementById('confidenceBar').classList.replace('to-blue-500', 'to-orange-500');
+                    document.getElementById('confidenceValue').classList.replace('text-cyan-400', 'text-red-400');
+                    ssvValue.innerText = 'Bearish Bias';
+                    ssvValue.className = 'text-xs font-bold text-red-400';
+                    document.getElementById('ssv-bear').classList.replace('bg-red-500/10', 'bg-red-500/80');
+                    document.getElementById('ssv-bear').classList.add('shadow-[0_0_12px_rgba(239,68,68,0.4)]');
+                } else {
+                    ssvValue.innerText = 'Bullish Conviction';
+                    ssvValue.className = 'text-xs font-bold text-emerald-400';
+                    document.getElementById('ssv-bull').classList.replace('bg-emerald-500/10', 'bg-emerald-500/80');
+                    document.getElementById('ssv-bull').classList.add('shadow-[0_0_12px_rgba(16,185,129,0.4)]');
+                }
+            }
+
+            if (txParams.intent === 'sign_sodex') {
+                 elActionLabel.innerText = "Authorize Execution";
+                 elAmountDisplay.innerText = txParams.action;
+                 elTokenDisplay.innerText = txParams.asset;
+                 btnAction.innerText = "Sign & Execute";
+            } else if (txParams.intent === 'connect') {
+                 elActionLabel.innerText = "Target Asset";
+                 elAmountDisplay.innerText = "Connect";
+                 elTokenDisplay.innerText = txParams.asset;
+            }
         }
 
         let walletProvider = null;
 
         modal.subscribeProvider(async ({ provider, address }) => {
-            if (provider && address) {
+            if (provider && address && txParams.intent !== 'dashboard') {
                 walletProvider = provider;
                 if (txParams.intent === 'connect') {
                     document.getElementById('statusBadge').innerText = "Connected";
@@ -282,24 +356,26 @@
             }
         });
 
-        btnAction.addEventListener('click', async (e) => {
-            e.preventDefault();
-            const originalText = btnAction.innerHTML;
-            btnAction.innerHTML = `<div class="loader"></div>`; 
-            try {
-                if (!walletProvider) {
-                    await modal.open();
+        if (btnAction) {
+            btnAction.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const originalText = btnAction.innerHTML;
+                btnAction.innerHTML = `<div class="loader"></div>`; 
+                try {
+                    if (!walletProvider) {
+                        await modal.open();
+                        btnAction.innerHTML = originalText;
+                    } else if (txParams.intent === 'sign_sodex') {
+                        await signSodexOrder();
+                    }
+                } catch (err) {
+                    console.error("Wallet modal error:", err);
+                    document.getElementById('statusText').innerText = "Wallet Error: " + err.message;
+                    document.getElementById('statusText').classList.add('text-red-400');
                     btnAction.innerHTML = originalText;
-                } else if (txParams.intent === 'sign_sodex') {
-                    await signSodexOrder();
                 }
-            } catch (err) {
-                console.error("Wallet modal error:", err);
-                document.getElementById('statusText').innerText = "Wallet Error: " + err.message;
-                document.getElementById('statusText').classList.add('text-red-400');
-                btnAction.innerHTML = originalText;
-            }
-        });
+            });
+        }
 
         async function signSodexOrder() {
             if (!walletProvider) return;
