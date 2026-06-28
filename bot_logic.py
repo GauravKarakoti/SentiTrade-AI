@@ -13,7 +13,7 @@ class SentimentAnalysis(BaseModel):
     confidence: int
     narrative_tags: list[str]
     rationale: str
-    key_factors: list[str]  # Added structured bullet points for transparency
+    key_factors: list[str]
     source_headline: str
 
 def build_prompt(news_batch: list[dict]) -> str:
@@ -191,3 +191,29 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload)
+
+# --- NEW KPI CALCULATION FUNCTIONS ---
+
+def calculate_win_rate(pnls: list[float]) -> float:
+    if not pnls:
+        return 0.0
+    wins = sum(1 for pnl in pnls if pnl > 0)
+    return (wins / len(pnls)) * 100
+
+def calculate_roi(starting_equity: float, current_equity: float) -> float:
+    if starting_equity == 0:
+        return 0.0
+    return ((current_equity - starting_equity) / starting_equity) * 100
+
+def calculate_max_drawdown(equity_curve: list[float]) -> float:
+    if not equity_curve:
+        return 0.0
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for equity in equity_curve:
+        if equity > peak:
+            peak = equity
+        drawdown = (peak - equity) / peak
+        if drawdown > max_dd:
+            max_dd = drawdown
+    return max_dd * 100

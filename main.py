@@ -11,11 +11,13 @@ from fastapi import FastAPI, Request, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from eth_utils import keccak
+from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_db, get_db, AsyncSessionLocal, User, ValueChainAnalytics
 from bot_logic import (
     build_prompt, analyze_with_llm, generate_signals, 
-    send_telegram_alert, generate_chat_reply
+    send_telegram_alert, generate_chat_reply, 
+    calculate_win_rate, calculate_roi, calculate_max_drawdown # Added KPI imports
 )
 from sosovalue_client import (
     fetch_news_from_api, deduplicate_and_categorize, fetch_market_snapshot
@@ -54,6 +56,49 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins (good for Ngrok/Telegram dev)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
+
+@app.get("/api/metrics")
+async def get_performance_metrics(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(ValueChainAnalytics.pnl_percentage)
+        .filter(ValueChainAnalytics.signal_accuracy.isnot(None))
+        .filter(ValueChainAnalytics.pnl_percentage.isnot(None)) # STRICTLY FILTER OUT NULL PNLs
+        .order_by(ValueChainAnalytics.timestamp.asc())
+    )
+    
+    # Safely extract values and ensure they are valid floats, ignoring any lingering Nones
+    raw_pnls = result.scalars().all()
+    pnls = [float(pnl) for pnl in raw_pnls if pnl is not None]
+    
+    # Simulate a portfolio compounding 10% risk per trade starting at $1,000
+    equity = 1000.0
+    equity_curve = [equity]
+    
+    for pnl in pnls:
+        # Pnl is now guaranteed to be a float, so division will not throw a TypeError
+        trade_return = equity * 0.10 * (pnl / 100.0) 
+        equity += trade_return
+        equity_curve.append(equity)
+        
+    current_equity = equity_curve[-1] if len(equity_curve) > 1 else 1000.0
+    
+    return {
+        "kpis": {
+            "win_rate": calculate_win_rate(pnls),
+            "roi": calculate_roi(1000.0, current_equity),
+            "max_drawdown": calculate_max_drawdown(equity_curve),
+            "total_trades": len(pnls)
+        },
+        "equity_curve": equity_curve
+    }
 
 async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
     result = await db.execute(
@@ -172,6 +217,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     help_message = (
         "📚 **SentiTrade-AI Command Directory**\n\n"
         "🔹 `/start` - Activate the agent and view the onboarding guide.\n"
+        "🔹 `/dashboard` - View live agent performance and equity curve.\n" # Added /dashboard
         "🔹 `/volatility <percentage>` - Set your risk guard (e.g., `/volatility 15`). Blocks signals above this limit.\n"
         "🔹 `/subscribe` - Unlock the premium ValueChain stream.\n"
         "🔹 `/stop` - Take the agent offline.\n\n"
@@ -371,6 +417,11 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         
         elif text == "/help":
             await send_direct_message(chat_id, help_message)
+            
+        elif text == "/dashboard":
+            web_app_url = f"{MINI_APP_URL}?intent=dashboard"
+            keyboard = {"inline_keyboard": [[{"text": "📊 Open Performance Dashboard", "web_app": {"url": web_app_url}}]]}
+            await send_direct_message(chat_id, "📈 **SentiTrade-AI Performance Dashboard**\n\nView real-time agent metrics, equity curve, and win rate.", reply_markup=keyboard)
 
         elif text == "/stop":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))

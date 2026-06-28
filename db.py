@@ -41,6 +41,12 @@ class ValueChainAnalytics(Base):
     pnl_percentage = Column(Float, nullable=True)       
     signal_accuracy = Column(Boolean, nullable=True)    
 
+class AgentEquitySnapshot(Base):
+    __tablename__ = "agent_equity_snapshots"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    simulated_equity = Column(Float, default=1000.0)
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
