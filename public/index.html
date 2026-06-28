@@ -65,6 +65,12 @@
                     </div>
                 </div>
             </div>
+            
+            <div id="aiLogicCard" class="bg-slate-800/80 border border-slate-700/50 rounded-lg p-3 hidden">
+                <p class="text-[10px] text-slate-400 font-mono tracking-widest uppercase mb-2">AI Decision Logic</p>
+                <p id="detailedRationale" class="text-xs text-slate-200 leading-relaxed font-medium">
+                    </p>
+            </div>
 
             <div id="sosovalue-index" class="bg-slate-900/80 hidden rounded-xl p-4 border border-slate-700/50 mt-4 mb-2 shadow-inner">
                 <div class="flex justify-between items-center mb-3">
@@ -175,7 +181,8 @@
             sodexChainId: parseInt(urlParams.get('sodexChainId') || '286623', 10),
             winRate: urlParams.get('winRate'),
             avgPnl: urlParams.get('avgPnl'),
-            maxDrawdown: urlParams.get('maxDrawdown')
+            maxDrawdown: urlParams.get('maxDrawdown'),
+            rationale: urlParams.get('rationale') // NEW param imported
         };
 
         const elActionLabel = document.getElementById('actionLabel');
@@ -191,6 +198,11 @@
             document.getElementById('historicalContextCard').style.display = 'block';
             document.getElementById('riskWarning').style.display = 'block';
             
+            if(txParams.rationale) {
+                document.getElementById('aiLogicCard').style.display = 'block';
+                document.getElementById('detailedRationale').innerText = txParams.rationale;
+            }
+            
             if(txParams.winRate) document.getElementById('statWinRate').innerText = txParams.winRate;
             if(txParams.avgPnl) document.getElementById('statAvgPnl').innerText = txParams.avgPnl;
             if(txParams.maxDrawdown) document.getElementById('statDrawdown').innerText = txParams.maxDrawdown;
@@ -198,7 +210,7 @@
             document.getElementById('confidenceValue').innerText = `${txParams.confidence}%`;
             document.getElementById('confidenceBar').style.width = `${txParams.confidence}%`;
 
-            // --- NEW SSI INDEX DETECTION LOGIC ---
+            // --- SSI INDEX DETECTION LOGIC ---
             if (txParams.asset.toLowerCase().includes('.ssi') || txParams.asset.toLowerCase() === '$ussi') {
                 const statusBadge = document.getElementById('statusBadge');
                 statusBadge.innerText = "SSI Protocol Index";
@@ -211,7 +223,6 @@
             } else {
                 document.getElementById('rationaleText').innerText = `Executing ${txParams.action} order for ${txParams.asset} based on real-time narrative strength.`;
             }
-            // ---------------------------------------
             
             const isSell = txParams.action.toUpperCase() === 'SELL';
             const ssvValue = document.getElementById('ssv-index-value');
