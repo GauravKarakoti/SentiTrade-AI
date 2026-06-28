@@ -13,6 +13,7 @@ class SentimentAnalysis(BaseModel):
     confidence: int
     narrative_tags: list[str]
     rationale: str
+    key_factors: list[str]  # Added structured bullet points for transparency
     source_headline: str
 
 def build_prompt(news_batch: list[dict]) -> str:
@@ -34,7 +35,7 @@ def build_prompt(news_batch: list[dict]) -> str:
 
     return f"""
 You are an autonomous SoSoValue Agentic System operating on the ValueChain.
-Analyze the following financial data to provide actionable intelligence.
+Analyze the following financial data to provide actionable intelligence for a beginner trader.
 
 CRITICAL INSTRUCTION - SSI INDEX INTEGRATION:
 If an article's narrative strongly impacts an entire sector rather than a single asset, you MUST route the signal to the appropriate SoSoValue Index (SSI) token instead of a single coin to achieve passive index investing:
@@ -48,7 +49,8 @@ For each article, output a JSON object with:
 - "sentiment": one of "bullish", "bearish", "neutral"
 - "confidence": integer between 0 and 100
 - "narrative_tags": array of relevant tags (e.g., "DeFi Index Allocation")
-- "rationale": a short sentence explaining the autonomous decision (max 150 chars).
+- "rationale": A beginner-friendly, 1-sentence explanation of WHY this trade is suggested. Avoid complex jargon.
+- "key_factors": An array of 2-3 short, bullet-point phrases highlighting the specific catalysts (e.g., "Institutional inflow detected", "Major protocol upgrade").
 - "source_headline": The exact title of the primary article driving this sentiment.
 
 Return the result as a JSON object containing a single key "data", which holds an array of these article objects.
@@ -67,7 +69,7 @@ def generate_chat_reply(user_message: str) -> str:
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are the SentiTrade-AI Agent, powered by SoSoValue. You provide intelligent, precise insights regarding the ValueChain, SoDEX routing, and on-chain finance."
+                    "content": "You are the SentiTrade-AI Agent, powered by SoSoValue. Explain on-chain finance and your logic in simple, beginner-friendly terms."
                 },
                 {"role": "user", "content": user_message}
             ],
@@ -94,7 +96,6 @@ def analyze_with_llm(prompt: str) -> list[dict]:
         raw = completion.choices[0].message.content
         data = json.loads(raw)
         
-        # Robustly extract the list
         extracted_list = []
         if isinstance(data, dict):
             if "data" in data and isinstance(data["data"], list):
@@ -102,13 +103,11 @@ def analyze_with_llm(prompt: str) -> list[dict]:
             elif "articles" in data and isinstance(data["articles"], list):
                 extracted_list = data["articles"]
             else:
-                # Fallback: look for ANY list in the dictionary values
                 for v in data.values():
                     if isinstance(v, list):
                         extracted_list = v
                         break
         
-        # Filter out anything that isn't a dictionary to prevent Pydantic crashes
         return [item for item in extracted_list if isinstance(item, dict)]
         
     except Exception as e:
@@ -119,7 +118,7 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
     signals = []
     for a in analyses:
         if not isinstance(a, dict):
-            continue # Extra failsafe
+            continue 
         try:
             sa = SentimentAnalysis(**a)
             if sa.confidence >= 80 and sa.sentiment in ("bullish", "bearish"):
@@ -128,6 +127,7 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
                     "action": "BUY" if sa.sentiment == "bullish" else "SELL",
                     "confidence": sa.confidence,
                     "rationale": sa.rationale,
+                    "key_factors": sa.key_factors,
                     "source_headline": sa.source_headline
                 })
         except ValidationError:
@@ -147,10 +147,12 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     
     filled_blocks = int(adjusted_confidence / 10)
     empty_blocks = 10 - filled_blocks
-    confidence_bar = "🟩" * filled_blocks + "⬜" * empty_blocks
+    confidence_bar = "🟢" * filled_blocks + "⚪" * empty_blocks
     
     action_emoji = "🟢 BUY" if signal['action'].upper() == "BUY" else "🔴 SELL"
     volatility_formatted = f"{volatility:.2f}%"
+    
+    factors_text = "\n".join([f"• {f}" for f in signal.get('key_factors', [])])
     
     callback_data_approve = f"approve_{clean_asset}_{signal['action']}_{adjusted_confidence}"
     
@@ -162,7 +164,7 @@ async def send_telegram_alert(chat_id: int, signal: dict):
                     "callback_data": callback_data_approve
                 },
                 {
-                    "text": "❌ Ignore", 
+                    "text": "❌ Dismiss", 
                     "callback_data": f"reject_{clean_asset}"
                 }
             ]
@@ -170,14 +172,14 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     }
     
     alert_text = (
-        f"🧠 **ValueChain AI Intelligence**\n\n"
-        f"**Asset:** {signal['asset']}\n"
-        f"**Action:** {action_emoji}\n"
-        f"**Risk-Adjusted Confidence:** {adjusted_confidence}%\n"
+        f"🎯 **New AI Trade Setup Discovered**\n\n"
+        f"🪙 **Asset:** {signal['asset']}\n"
+        f"⚡ **Action:** {action_emoji}\n"
+        f"🧠 **AI Confidence:** {adjusted_confidence}%\n"
         f"{confidence_bar}\n\n"
-        f"📰 **Source Driver:** _{signal['source_headline']}_\n"
-        f"💡 **AI Rationale:** {signal['rationale']}\n"
-        f"📊 **24h Volatility Risk:** {volatility_formatted}\n"
+        f"📖 **The Logic (Why?):**\n_{signal['rationale']}_\n\n"
+        f"🔍 **Key Catalysts:**\n{factors_text}\n\n"
+        f"📊 **Risk (24h Volatility):** {volatility_formatted}\n"
     )
     
     payload = {

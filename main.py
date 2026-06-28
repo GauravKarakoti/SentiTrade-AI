@@ -105,13 +105,12 @@ async def backfill_signal_performance(db: AsyncSession):
                     
                 record.forward_price_change = price_change
         except Exception:
-            pass # Skips updates if API and Cache are unreachable
+            pass
             
     if pending_signals:
         await db.commit()
 
 async def perform_analysis(db: AsyncSession):
-    """Core logic to fetch, deduplicate, analyze, and dispatch signals."""
     await backfill_signal_performance(db)
 
     news_items = await fetch_news_from_api()
@@ -129,7 +128,6 @@ async def perform_analysis(db: AsyncSession):
 
         for index, signal in enumerate(signals):
             try:
-                # If this raises an exception (API and Cache down), it safely aborts signal dispatch ("pauses signals")
                 market_data = await fetch_market_snapshot(signal["asset"])
                 entry_price = float(market_data.get("price", 0.0))
                 volatility = abs(float(market_data.get("change_pct_24h", 0.0)))
@@ -166,11 +164,19 @@ async def perform_analysis(db: AsyncSession):
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    # ...(Truncated for brevity. Same logic as original)...
     try:
         update = await request.json()
     except Exception:
         return {"status": "error"}
+
+    help_message = (
+        "📚 **SentiTrade-AI Command Directory**\n\n"
+        "🔹 `/start` - Activate the agent and view the onboarding guide.\n"
+        "🔹 `/volatility <percentage>` - Set your risk guard (e.g., `/volatility 15`). Blocks signals above this limit.\n"
+        "🔹 `/subscribe` - Unlock the premium ValueChain stream.\n"
+        "🔹 `/stop` - Take the agent offline.\n\n"
+        "💡 *Tip: You can also chat with me directly! Send any message to ask about market narratives.*"
+    )
 
     if "callback_query" in update:
         callback_query = update["callback_query"]
@@ -190,9 +196,18 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             action = parts[2] if len(parts) > 2 else "BUY"
             confidence = parts[3] if len(parts) > 3 else "80"
             
-            await answer_callback_query(callback_id, "Initializing Routing...")
+            await answer_callback_query(callback_id, "Fetching AI Logic...")
             
             stats = await get_historical_performance(db, formatted_asset)
+            
+            # Fetch the LATEST rationale for this asset
+            result = await db.execute(
+                select(ValueChainAnalytics.rationale)
+                .filter(ValueChainAnalytics.asset == formatted_asset)
+                .order_by(ValueChainAnalytics.timestamp.desc())
+                .limit(1)
+            )
+            latest_rationale = result.scalar_one_or_none() or "AI logic applied based on recent news."
 
             query_params = urllib.parse.urlencode({
                 "intent": "connect",
@@ -201,20 +216,32 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "confidence": confidence,
                 "winRate": stats["winRate"],
                 "avgPnl": stats["avgPnl"],
-                "maxDrawdown": stats["maxDrawdown"]
+                "maxDrawdown": stats["maxDrawdown"],
+                "rationale": latest_rationale
             })
             
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             
-            keyboard = {"keyboard": [[{"text": "🔗 Connect Wallet", "web_app": {"url": web_app_url}}]], "resize_keyboard": True, "one_time_keyboard": True}
+            keyboard = {"keyboard": [[{"text": "🔗 Review & Connect Wallet", "web_app": {"url": web_app_url}}]], "resize_keyboard": True, "one_time_keyboard": True}
             await send_direct_message(
                 chat_id, 
-                f"⚡ **Agentic Execution: {formatted_asset}**\n\n"
-                f"Win Rate: {stats['winRate']}\n"
-                f"Avg PnL: {stats['avgPnl']}\n\n"
-                f"Review metrics and authorize to continue.", 
+                f"⚡ **Agentic Execution: {formatted_asset}**\n\nReview the AI Logic and historical performance metrics in the Web Console before executing.", 
                 reply_markup=keyboard
             )
+            
+        elif data == "cmd_subscribe":
+            result = await db.execute(select(User).filter(User.chat_id == chat_id))
+            user = result.scalar_one_or_none()
+            if user:
+                user.is_subscribed = True
+                await db.commit()
+            await answer_callback_query(callback_id, "Subscribed!")
+            await send_direct_message(chat_id, "🎉 **Subscription Activated!** You will now receive agentic SoDEX trade signals.")
+            
+        elif data == "cmd_help":
+            await answer_callback_query(callback_id, "Loading help...")
+            await send_direct_message(chat_id, help_message)
+            
         return {"status": "ok"}
 
     if "message" in update and "web_app_data" in update["message"]:
@@ -319,32 +346,30 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             if not user:
                 db.add(User(chat_id=chat_id, is_active=True))
                 await db.commit()
-                welcome_message = (
-                    "🤖 **Welcome to SentiTrade-AI!**\n\n"
-                    "Built for the **SoSoValue Buildathon**, I am your agentic research terminal and strategy assistant. I don't just display data—I provide a complete **research-to-execution** ecosystem to help you discover opportunities and automate quant workflows.\n\n"
-                    "**Core Workflows:**\n"
-                    "1️⃣ **Structured AI Discovery:** I continuously analyze SoSoValue market narratives to spot high-value opportunities.\n"
-                    "2️⃣ **Risk Management:** Use `/volatility 15` to set a strict volatility guard and protect your downside from market swings.\n"
-                    "3️⃣ **High-Performance Execution:** When an opportunity is discovered, click 'Route via SoDEX' to authorize the trade securely on-chain in seconds.\n\n"
-                    "Let's build intelligent portfolios together. Use `/subscribe` to unlock the full workflow!"
-                )
-                await send_direct_message(chat_id, welcome_message)
-            else:
+                
+            welcome_message = (
+                "👋 **Welcome to SentiTrade-AI!**\n\n"
+                "I read thousands of crypto news articles and SoSoValue market data so you don't have to.\n\n"
+                "When I spot a strong narrative, I score the sentiment and send you clear, actionable trade setups with **explanations you can actually understand**.\n\n"
+                "**How it works:**\n"
+                "🔍 **Discover:** I scan the ValueChain 24/7.\n"
+                "🧠 **Analyze:** I grade sentiment and explain *why*.\n"
+                "⚡ **Execute:** You review the logic and execute gasless trades via SoDEX.\n\n"
+                "👇 **Tap below to unlock your premium AI feed!**"
+            )
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🔓 Subscribe to AI Signals", "callback_data": "cmd_subscribe"}],
+                    [{"text": "⚙️ Help & Settings", "callback_data": "cmd_help"}]
+                ]
+            }
+            await send_direct_message(chat_id, welcome_message, reply_markup=keyboard)
+            if user:
                 user.is_active = True
                 await db.commit()
-                await send_direct_message(chat_id, "Agentic alerts reactivated. Your strategy assistant is back online.")
         
         elif text == "/help":
-            help_message = (
-                "📚 **SentiTrade-AI Command Directory**\n\n"
-                "Here are the commands you can use to control your agentic experience:\n\n"
-                "🔹 `/start` - Activate the agent and view the onboarding guide.\n"
-                "🔹 `/help` - View this list of available commands.\n"
-                "🔹 `/volatility <percentage>` - Set your risk guard (e.g., `/volatility 15`). Automatically blocks signals for assets exceeding this 24h volatility limit.\n"
-                "🔹 `/subscribe` - Unlock the premium ValueChain stream and SoDEX routing alerts.\n"
-                "🔹 `/stop` - Take the agent offline and stop receiving all alerts.\n\n"
-                "💡 *Tip: You can also chat with me directly! Send any message to ask about market narratives, SoDEX routing, or on-chain finance.*"
-            )
             await send_direct_message(chat_id, help_message)
 
         elif text == "/stop":
@@ -386,7 +411,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
 @app.post("/run-analysis")
 async def run_analysis_endpoint(db: AsyncSession = Depends(get_db)):
-    """Kept as a manual trigger, but delegates execution to the core analysis function."""
     try:
         return await perform_analysis(db)
     except Exception as e:
