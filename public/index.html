@@ -503,7 +503,14 @@
                 console.error("Deposit error:", error);
                 btnAction.disabled = false;
                 btnAction.innerHTML = `Retry Deposit <span class="ml-1">🔄</span>`;
-                document.getElementById('statusText').innerText = "Transaction failed or rejected by user.";
+                
+                // Extract the specific blockchain revert reason
+                let errorMsg = "Transaction failed or rejected by user.";
+                if (error.reason) errorMsg = error.reason;
+                else if (error.shortMessage) errorMsg = error.shortMessage;
+                else if (error.message) errorMsg = error.message.split('\n')[0];
+                
+                document.getElementById('statusText').innerText = `Error: ${errorMsg}`;
                 document.getElementById('statusText').classList.add('text-red-400');
             }
         }
