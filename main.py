@@ -17,7 +17,7 @@ from db import init_db, get_db, AsyncSessionLocal, User, ValueChainAnalytics
 from bot_logic import (
     build_prompt, analyze_with_llm, generate_signals, 
     send_telegram_alert, generate_chat_reply, 
-    calculate_win_rate, calculate_roi, calculate_max_drawdown # Added KPI imports
+    calculate_win_rate, calculate_roi, calculate_max_drawdown
 )
 from sosovalue_client import (
     fetch_news_from_api, deduplicate_and_categorize, fetch_market_snapshot
@@ -26,6 +26,8 @@ from sosovalue_client import (
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MINI_APP_URL = os.getenv("MINI_APP_URL")
 SODEX_SPOT_API = os.getenv("SODEX_SPOT_API", "https://mainnet-gw.sodex.dev/api/v1/spot")
+VAULT_MANAGER_URL = os.getenv("VAULT_MANAGER_URL", "http://localhost:3000")
+VAULT_ADDRESS = os.getenv("VAULT_ADDRESS", "0x0000000000000000000000000000000000000000")
 
 SSI_CONTRACTS = {
     "MAG7.ssi": "0x9E6A46f294bB67c20F1D1E7AfB0bBEf614403B55",
@@ -37,14 +39,12 @@ SSI_CONTRACTS = {
 background_tasks = set()
 
 async def background_analysis_loop():
-    """Background task polling news/market-data endpoints every 10 minutes."""
     while True:
         try:
             async with AsyncSessionLocal() as db:
                 await perform_analysis(db)
         except Exception as e:
             print(f"Background Loop Error: {e}")
-        
         await asyncio.sleep(600)
 
 @asynccontextmanager
@@ -59,10 +59,10 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins (good for Ngrok/Telegram dev)
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/api/metrics")
@@ -70,20 +70,17 @@ async def get_performance_metrics(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(ValueChainAnalytics.pnl_percentage)
         .filter(ValueChainAnalytics.signal_accuracy.isnot(None))
-        .filter(ValueChainAnalytics.pnl_percentage.isnot(None)) # STRICTLY FILTER OUT NULL PNLs
+        .filter(ValueChainAnalytics.pnl_percentage.isnot(None))
         .order_by(ValueChainAnalytics.timestamp.asc())
     )
     
-    # Safely extract values and ensure they are valid floats, ignoring any lingering Nones
     raw_pnls = result.scalars().all()
     pnls = [float(pnl) for pnl in raw_pnls if pnl is not None]
     
-    # Simulate a portfolio compounding 10% risk per trade starting at $1,000
     equity = 1000.0
     equity_curve = [equity]
     
     for pnl in pnls:
-        # Pnl is now guaranteed to be a float, so division will not throw a TypeError
         trade_return = equity * 0.10 * (pnl / 100.0) 
         equity += trade_return
         equity_curve.append(equity)
@@ -199,8 +196,8 @@ async def perform_analysis(db: AsyncSession):
                 print(f"Skipping signal for {signal['asset']} due to missing market data: {e}")
 
         if len(signals) > 1:
-            missed_count = len(signals) - 1
-            upsell_msg = f"🔒 **{missed_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream and premium SoDEX routing alerts."
+            with_count = len(signals) - 1
+            upsell_msg = f"🔒 **{with_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream and premium SoDEX routing alerts."
             for chat_id in free_users:
                 await send_direct_message(chat_id, upsell_msg)
     
@@ -217,11 +214,15 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     help_message = (
         "📚 **SentiTrade-AI Command Directory**\n\n"
         "🔹 `/start` - Activate the agent and view the onboarding guide.\n"
-        "🔹 `/dashboard` - View live agent performance and equity curve.\n" # Added /dashboard
-        "🔹 `/volatility <percentage>` - Set your risk guard (e.g., `/volatility 15`). Blocks signals above this limit.\n"
+        "🔹 `/dashboard` - View live agent performance and equity curve.\n"
+        "🔹 `/vault` - View the Vault's current allocations and TVL.\n"
+        "🔹 `/deposit` - Deposit USDC into the autonomous AI Vault.\n"
+        "🔹 `/redeem` - Burn vSENTI to withdraw your USDC from the Vault.\n"
+        "🔹 `/portfolio <address>` - Check your vSENTI balance and its current value.\n"
+        "🔹 `/volatility <percentage>` - Set your risk guard (e.g., `/volatility 15`).\n"
         "🔹 `/subscribe` - Unlock the premium ValueChain stream.\n"
         "🔹 `/stop` - Take the agent offline.\n\n"
-        "💡 *Tip: You can also chat with me directly! Send any message to ask about market narratives.*"
+        "💡 *Tip: You can also chat with me directly!*"
     )
 
     if "callback_query" in update:
@@ -238,42 +239,76 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         elif data.startswith("approve_"):
             parts = data.split("_")
             asset = parts[1]
-            formatted_asset = f"${asset}"
+            formatted_asset = asset if asset.startswith("$") else f"${asset}"
             action = parts[2] if len(parts) > 2 else "BUY"
-            confidence = parts[3] if len(parts) > 3 else "80"
+            confidence = int(parts[3]) if len(parts) > 3 else 85
             
-            await answer_callback_query(callback_id, "Fetching AI Logic...")
-            
-            stats = await get_historical_performance(db, formatted_asset)
-            
-            # Fetch the LATEST rationale for this asset
-            result = await db.execute(
-                select(ValueChainAnalytics.rationale)
-                .filter(ValueChainAnalytics.asset == formatted_asset)
-                .order_by(ValueChainAnalytics.timestamp.desc())
-                .limit(1)
-            )
-            latest_rationale = result.scalar_one_or_none() or "AI logic applied based on recent news."
+            clean_name = asset.replace("$", "")
+            if clean_name in SSI_CONTRACTS or ".ssi" in clean_name.lower():
+                await answer_callback_query(callback_id, "Executing vault rebalance...")
+                await send_direct_message(
+                    chat_id, 
+                    f"⏳ **Executing Vault Rebalance via SSI Protocol...**\nRouting tokenized capital to {formatted_asset}. Awaiting Base network verification."
+                )
 
-            query_params = urllib.parse.urlencode({
-                "intent": "connect",
-                "asset": formatted_asset,
-                "action": action,
-                "confidence": confidence,
-                "winRate": stats["winRate"],
-                "avgPnl": stats["avgPnl"],
-                "maxDrawdown": stats["maxDrawdown"],
-                "rationale": latest_rationale
-            })
+                try:
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        resp = await client.post(
+                            f"{VAULT_MANAGER_URL}/api/execute-rebalance",
+                            json={
+                                "asset": formatted_asset,
+                                "action": action,
+                                "confidence": confidence
+                            }
+                        )
+                    resp_data = resp.json()
+                    
+                    if resp.status_code == 200 and resp_data.get("success"):
+                        tx_hash = resp_data.get("tx_hash")
+                        explorer_link = f"https://sepolia.basescan.org/tx/{tx_hash}"
+                        success_text = (
+                            f"✅ **Vault Successfully Rebalanced!**\n\n"
+                            f"🪙 **Index Target:** {formatted_asset}\n"
+                            f"⚡ **Strategy Action:** {action}\n"
+                            f"🔗 [View on Basescan]({explorer_link})"
+                        )
+                        await send_direct_message(chat_id, success_text)
+                    else:
+                        error_msg = resp_data.get("error", "Unknown execution error node side.")
+                        await send_direct_message(chat_id, f"❌ **Smart Contract Execution Failed:**\n`{error_msg}`")
+                except httpx.RequestError as e:
+                    await send_direct_message(chat_id, f"🔌 **Service Error:** Could not reach Vault Execution Node.\nError: `{str(e)}`")
             
-            web_app_url = f"{MINI_APP_URL}?{query_params}"
-            
-            keyboard = {"keyboard": [[{"text": "🔗 Review & Connect Wallet", "web_app": {"url": web_app_url}}]], "resize_keyboard": True, "one_time_keyboard": True}
-            await send_direct_message(
-                chat_id, 
-                f"⚡ **Agentic Execution: {formatted_asset}**\n\nReview the AI Logic and historical performance metrics in the Web Console before executing.", 
-                reply_markup=keyboard
-            )
+            else:
+                await answer_callback_query(callback_id, "Fetching AI Logic...")
+                stats = await get_historical_performance(db, formatted_asset)
+                
+                result = await db.execute(
+                    select(ValueChainAnalytics.rationale)
+                    .filter(ValueChainAnalytics.asset == formatted_asset)
+                    .order_by(ValueChainAnalytics.timestamp.desc())
+                    .limit(1)
+                )
+                latest_rationale = result.scalar_one_or_none() or "AI logic applied based on recent news."
+
+                query_params = urllib.parse.urlencode({
+                    "intent": "connect",
+                    "asset": formatted_asset,
+                    "action": action,
+                    "confidence": str(confidence),
+                    "winRate": stats["winRate"],
+                    "avgPnl": stats["avgPnl"],
+                    "maxDrawdown": stats["maxDrawdown"],
+                    "rationale": latest_rationale
+                })
+                
+                web_app_url = f"{MINI_APP_URL}?{query_params}"
+                keyboard = {"keyboard": [[{"text": "🔗 Review & Connect Wallet", "web_app": {"url": web_app_url}}]], "resize_keyboard": True, "one_time_keyboard": True}
+                await send_direct_message(
+                    chat_id, 
+                    f"⚡ **Agentic Execution: {formatted_asset}**\n\nReview the AI Logic and historical performance metrics in the Web Console before executing.", 
+                    reply_markup=keyboard
+                )
             
         elif data == "cmd_subscribe":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
@@ -297,7 +332,20 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             web_app_payload = json.loads(update["message"]["web_app_data"]["data"])
             status = web_app_payload.get("status")
 
-            if status == "connected":
+            # --- NEW WEB APP LISTENERS FOR DEPOSIT/REDEEM SUCCESS ---
+            if status == "deposited":
+                user_address = web_app_payload.get("address")
+                amount = web_app_payload.get("amount", "0")
+                await send_direct_message(chat_id, f"✅ **Deposit Confirmed!**\n\nSuccessfully deposited **{amount} USDC** from `{user_address[:6]}...{user_address[-4:]}` into the SentiTrade Vault.")
+                return {"status": "ok"}
+            
+            elif status == "redeemed":
+                user_address = web_app_payload.get("address")
+                amount = web_app_payload.get("amount", "0")
+                await send_direct_message(chat_id, f"✅ **Redemption Confirmed!**\n\nSuccessfully burned **{amount} vSENTI** from `{user_address[:6]}...{user_address[-4:]}` and redeemed your USDC.")
+                return {"status": "ok"}
+
+            elif status == "connected":
                 user_address = web_app_payload.get("address")
                 asset = web_app_payload.get("asset", "Unknown")
                 action = web_app_payload.get("action", "BUY")
@@ -308,7 +356,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 try:
                     order_data = await prepare_sodex_order(asset=asset, action=action, address=user_address)
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
-
                     stats = await get_historical_performance(db, asset)
 
                     query_params = urllib.parse.urlencode({
@@ -327,12 +374,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     })
                     
                     web_app_url = f"{MINI_APP_URL}?{query_params}"
-                    
-                    keyboard = {
-                        "keyboard": [[{"text": f"🔐 Authorize Agentic Trade", "web_app": {"url": web_app_url}}]],
-                        "resize_keyboard": True,
-                        "one_time_keyboard": True
-                    }
+                    keyboard = {"keyboard": [[{"text": f"🔐 Authorize Agentic Trade", "web_app": {"url": web_app_url}}]],"resize_keyboard": True,"one_time_keyboard": True}
 
                     success_msg = f"✅ **SoSoValue Agent Ready**\nAsset: {asset}\n\n⚠️ **Action Required:**\nSign the payload to authorize execution on the ValueChain."
                     await send_direct_message(chat_id, success_msg, reply_markup=keyboard)
@@ -346,21 +388,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user_address = web_app_payload.get("address")
                 original_nonce = str(web_app_payload.get("nonce"))
 
-                if signature.startswith("0x01"):
-                    typed_sig = signature
-                elif signature.startswith("0x"):
-                    typed_sig = "0x01" + signature[2:]
-                else:
-                    typed_sig = "0x01" + signature
+                typed_sig = signature if signature.startswith("0x01") else ("0x01" + signature[2:] if signature.startswith("0x") else "0x01" + signature)
                 
-                headers = {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "X-API-Key": user_address,  
-                    "X-API-Sign": typed_sig,  
-                    "X-API-Nonce": original_nonce
-                }
-
+                headers = {"Content-Type": "application/json", "Accept": "application/json", "X-API-Key": user_address, "X-API-Sign": typed_sig, "X-API-Nonce": original_nonce}
                 parsed_payload = json.loads(raw_payload)
                 request_body = json.dumps(parsed_payload["params"], separators=(',', ':'))
 
@@ -370,12 +400,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     
                     if resp.status_code == 200 and resp_data.get("data", [{}])[0].get("code") == 0:
                         order_id = resp_data["data"][0].get("orderID", "Unknown")
-                        remove_keyboard = {"remove_keyboard": True}
-                        await send_direct_message(chat_id, f"🎉 **Intelligent Trade Executed!**\nSoDEX Order ID: `{order_id}`\n\n*Welcome to the future of finance.*", reply_markup=remove_keyboard)
+                        await send_direct_message(chat_id, f"🎉 **Intelligent Trade Executed!**\nSoDEX Order ID: `{order_id}`\n\n*Welcome to the future of finance.*", reply_markup={"remove_keyboard": True})
                     else:
                         error_detail = resp_data.get("data", [{}])[0].get("error", resp.text)
-                        remove_keyboard = {"remove_keyboard": True}
-                        await send_direct_message(chat_id, f"❌ **SoDEX Execution Failed:**\n`{error_detail}`", reply_markup=remove_keyboard)
+                        await send_direct_message(chat_id, f"❌ **SoDEX Execution Failed:**\n`{error_detail}`", reply_markup={"remove_keyboard": True})
                         
         except json.JSONDecodeError:
             await send_direct_message(chat_id, "⚠️ Received malformed data from the agent interface.")
@@ -404,12 +432,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "👇 **Tap below to unlock your premium AI feed!**"
             )
             
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🔓 Subscribe to AI Signals", "callback_data": "cmd_subscribe"}],
-                    [{"text": "⚙️ Help & Settings", "callback_data": "cmd_help"}]
-                ]
-            }
+            keyboard = {"inline_keyboard": [[{"text": "🔓 Subscribe to AI Signals", "callback_data": "cmd_subscribe"}],[{"text": "⚙️ Help & Settings", "callback_data": "cmd_help"}]]}
             await send_direct_message(chat_id, welcome_message, reply_markup=keyboard)
             if user:
                 user.is_active = True
@@ -422,6 +445,110 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             web_app_url = f"{MINI_APP_URL}?intent=dashboard"
             keyboard = {"inline_keyboard": [[{"text": "📊 Open Performance Dashboard", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(chat_id, "📈 **SentiTrade-AI Performance Dashboard**\n\nView real-time agent metrics, equity curve, and win rate.", reply_markup=keyboard)
+
+        # --- NEW VAULT STATUS COMMAND ---
+        elif text == "/vault":
+            await send_direct_message(chat_id, "🔍 **Fetching on-chain Vault data...**")
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(f"{VAULT_MANAGER_URL}/api/vault-status")
+                    
+                if resp.status_code == 200:
+                    data = resp.json()
+                    tvl = data.get("totalAssets", 0)
+                    usdc_bal = data.get("usdcBalance", 0)
+                    usdc_pct = data.get("usdcPercentage", 100)
+                    allocations = data.get("allocations", [])
+                    
+                    alloc_text = ""
+                    for alloc in allocations:
+                        alloc_text += f"• **{alloc['asset']}**: {alloc['percentage']}% (${alloc['value']:,.2f})\n"
+                        
+                    msg = (
+                        f"🏦 **SentiTrade Autonomous Vault**\n\n"
+                        f"💵 **Total Value Locked (TVL):** `${tvl:,.2f}`\n\n"
+                        f"📊 **Current Allocations:**\n"
+                        f"• **USDC (Idle):** {usdc_pct}%\n"
+                        f"{alloc_text}\n"
+                        f"Use `/deposit` to add funds or `/redeem` to withdraw."
+                    )
+                    
+                    query_dep = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
+                    query_red = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
+                    
+                    keyboard = {"inline_keyboard": [[{"text": "💰 Deposit", "web_app": {"url": f"{MINI_APP_URL}?{query_dep}"}}, {"text": "📤 Redeem", "web_app": {"url": f"{MINI_APP_URL}?{query_red}"}}]]}
+                    await send_direct_message(chat_id, msg, reply_markup=keyboard)
+                else:
+                    await send_direct_message(chat_id, "❌ **Error:** Could not fetch vault status.")
+            except Exception as e:
+                await send_direct_message(chat_id, f"🔌 **Service Disconnected:** Could not reach the Vault Execution Node.\n`{str(e)}`")
+
+        elif text == "/deposit":
+            query_params = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
+            web_app_url = f"{MINI_APP_URL}?{query_params}"
+            keyboard = {"inline_keyboard": [[{"text": "💰 Open Deposit Portal", "web_app": {"url": web_app_url}}]]}
+            await send_direct_message(
+                chat_id,
+                "🏦 **Deposit to SentiTrade AI Vault**\n\n"
+                "Deposit USDC into the autonomous hedge fund to receive yield-bearing `vSENTI` shares.\n\n"
+                "Tap below to connect your wallet and execute the deposit securely on the Base Network.",
+                reply_markup=keyboard
+            )
+            
+        # --- NEW REDEEM COMMAND ---
+        elif text == "/redeem":
+            query_params = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
+            web_app_url = f"{MINI_APP_URL}?{query_params}"
+            keyboard = {"inline_keyboard": [[{"text": "📤 Open Redemption Portal", "web_app": {"url": web_app_url}}]]}
+            await send_direct_message(
+                chat_id,
+                "📤 **Redeem SentiTrade Vault Shares**\n\n"
+                "Burn your `vSENTI` shares to withdraw your proportional USDC from the Vault.\n\n"
+                "Tap below to connect your wallet and execute the redemption securely on the Base Network.",
+                reply_markup=keyboard
+            )
+            
+        elif text.startswith("/portfolio"):
+            parts = text.split(" ")
+            if len(parts) < 2:
+                await send_direct_message(chat_id, "⚠️ **Usage:** `/portfolio <your_wallet_address>`\nExample: `/portfolio 0x123...abc`")
+                return {"status": "ok"}
+            
+            wallet_address = parts[1]
+            if not wallet_address.startswith("0x") or len(wallet_address) != 42:
+                await send_direct_message(chat_id, "❌ Invalid Ethereum wallet address format.")
+                return {"status": "ok"}
+            
+            await send_direct_message(chat_id, "🔍 **Scanning the blockchain for your vault assets...**")
+            
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(f"{VAULT_MANAGER_URL}/api/vault-balance/{wallet_address}")
+                    
+                if resp.status_code == 200:
+                    data = resp.json()
+                    shares = float(data.get("shares", 0))
+                    assets = float(data.get("assets", 0))
+                    
+                    if shares == 0:
+                        msg = (
+                            f"💼 **Vault Portfolio: {wallet_address[:6]}...{wallet_address[-4:]}**\n\n"
+                            f"You currently do not hold any `vSENTI` shares.\n"
+                            f"Use `/deposit` to fund your account and begin earning automated yield!"
+                        )
+                    else:
+                        msg = (
+                            f"💼 **Vault Portfolio: {wallet_address[:6]}...{wallet_address[-4:]}**\n\n"
+                            f"🪙 **vSENTI Balance:** `{shares:,.2f}` shares\n"
+                            f"💵 **Current Value:** `${assets:,.2f} USDC`\n\n"
+                            f"📈 _Your value automatically grows as the AI's rebalancing strategy generates profit._\n"
+                            f"Use `/redeem` to withdraw."
+                        )
+                    await send_direct_message(chat_id, msg)
+                else:
+                    await send_direct_message(chat_id, "❌ **Error:** Could not fetch portfolio data from the network.")
+            except Exception as e:
+                await send_direct_message(chat_id, f"🔌 **Service Disconnected:** Could not reach the Vault Execution Node.\n`{str(e)}`")
 
         elif text == "/stop":
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
@@ -470,11 +597,7 @@ async def run_analysis_endpoint(db: AsyncSession = Depends(get_db)):
     
 async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd: float = 100.0) -> dict:
     clean_asset = asset.replace('$', '').upper()
-    
-    if clean_asset.endswith('.SSI') or clean_asset == "USSI":
-        target_symbol_name = f"v{clean_asset}_vUSDC"
-    else:
-        target_symbol_name = f"v{clean_asset}_vUSDC"
+    target_symbol_name = f"v{clean_asset}_vUSDC"
     
     async with httpx.AsyncClient(timeout=15.0) as client:
         state_resp = await client.get(f"{SODEX_SPOT_API}/accounts/{address}/state")
@@ -518,7 +641,7 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
             raise ValueError(f"Failed to locate the ID for '{clean_asset}' on SoDEX.")
 
     order_item = {
-        "symbolID": symbol_id,             
+        "symbolID": symbol_id,            
         "clOrdID": str(uuid.uuid4())[:36], 
         "side": 1 if action == "BUY" else 2,
         "type": 2,        

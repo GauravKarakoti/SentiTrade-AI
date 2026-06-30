@@ -19,42 +19,38 @@ class SentimentAnalysis(BaseModel):
 def build_prompt(news_batch: list[dict]) -> str:
     articles = []
     for n in news_batch:
-        matched = n.get("matched_currencies")
-        asset = matched[0].get("symbol", matched[0].get("name", "N/A")) if matched and isinstance(matched, list) else "N/A"
-        if asset == "N/A":
-            continue
-            
         content = n.get("content", "No Content")
         sector_tags = n.get("sector_tags", [])
         sectors_str = ", ".join(sector_tags) if sector_tags else "Uncategorized"
+        headline = n.get('title', 'No Title')
         
-        articles.append(f"- {n.get('title', 'No Title')} (Asset: {asset} | Sectors: {sectors_str}) | Content: {content}")
+        articles.append(f"- {headline} (Sectors: {sectors_str}) | Content: {content}")
         
-        if len(articles) >= 10:
+        # Increased context window to 15 to catch broader macro trends
+        if len(articles) >= 15:
             break
 
     return f"""
-You are an autonomous SoSoValue Agentic System operating on the ValueChain.
-Analyze the following financial data to provide actionable intelligence for a beginner trader.
+You are the SentiTrade AI, an autonomous asset manager operating a tokenized copy-trading vault. 
+Analyze the following financial data to determine if a macro-economic sector rotation is required.
 
-CRITICAL INSTRUCTION - SSI INDEX INTEGRATION:
-If an article's narrative strongly impacts an entire sector rather than a single asset, you MUST route the signal to the appropriate SoSoValue Index (SSI) token instead of a single coin to achieve passive index investing:
-- Top 7 Market Cap / Broad Market Bull: output "$MAG7.ssi"
-- Meme Coin Sector: output "$MEME.ssi"
-- DeFi Sector: output "$DEFI.ssi"
-- Macro uncertainty / Delta-neutral Hedging: output "$USSI"
+CRITICAL INSTRUCTION - SSI INDEX ROUTING:
+You are managing an Ethereum ERC-4626 vault. You do not buy individual tokens. You ONLY allocate capital into SoSoValue Index (SSI) tokens to achieve passive, sector-wide exposure.
+- For AI/Tech/Broad Bullishness: route to "$MAG7.ssi"
+- For on-chain finance dominance: route to "$DEFI.ssi"
+- For high-risk speculation waves: route to "$MEME.ssi"
 
-For each article, output a JSON object with:
-- "asset": The standard ticker with a '$' prefix (e.g., "$TON") OR the appropriate SSI Index token (e.g., "$MEME.ssi").
-- "sentiment": one of "bullish", "bearish", "neutral"
-- "confidence": integer between 0 and 100
-- "narrative_tags": array of relevant tags (e.g., "DeFi Index Allocation")
-- "rationale": A beginner-friendly, 1-sentence explanation of WHY this trade is suggested. Avoid complex jargon.
-- "key_factors": An array of 2-3 short, bullet-point phrases highlighting the specific catalysts (e.g., "Institutional inflow detected", "Major protocol upgrade").
+Output a strict JSON object with a single key "data", holding an array of action objects.
+Each object MUST contain:
+- "asset": The exact string "$MAG7.ssi", "$DEFI.ssi", or "$MEME.ssi"
+- "sentiment": "bullish" (Triggers BUY function) or "bearish" (Triggers SELL function)
+- "confidence": Integer 0-100. Must be > 85 to trigger a vault rebalance.
+- "narrative_tags": array of relevant tags (e.g., "DeFi Index Allocation", "Macro Shift")
+- "rationale": A crisp, 1-sentence explanation of the macro catalyst driving this rebalance.
+- "key_factors": Array of 2-3 specific catalysts (e.g., "Institutional inflow detected").
 - "source_headline": The exact title of the primary article driving this sentiment.
 
-Return the result as a JSON object containing a single key "data", which holds an array of these article objects.
-Articles:
+News Feed:
 {chr(10).join(articles)}
 """
 
@@ -69,7 +65,7 @@ def generate_chat_reply(user_message: str) -> str:
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are the SentiTrade-AI Agent, powered by SoSoValue. Explain on-chain finance and your logic in simple, beginner-friendly terms."
+                    "content": "You are the SentiTrade-AI Agent, powered by SoSoValue. Explain on-chain finance, vault mechanics, and your macro logic in simple, beginner-friendly terms."
                 },
                 {"role": "user", "content": user_message}
             ],
@@ -121,7 +117,8 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
             continue 
         try:
             sa = SentimentAnalysis(**a)
-            if sa.confidence >= 80 and sa.sentiment in ("bullish", "bearish"):
+            # Vault logic requires strict confidence threshold (>= 85) to avoid over-trading
+            if sa.confidence >= 85 and sa.sentiment in ("bullish", "bearish"):
                 signals.append({
                     "asset": sa.asset,
                     "action": "BUY" if sa.sentiment == "bullish" else "SELL",
@@ -149,7 +146,7 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     empty_blocks = 10 - filled_blocks
     confidence_bar = "🟢" * filled_blocks + "⚪" * empty_blocks
     
-    action_emoji = "🟢 BUY" if signal['action'].upper() == "BUY" else "🔴 SELL"
+    action_emoji = "🟢 ALLOCATE (BUY)" if signal['action'].upper() == "BUY" else "🔴 LIQUIDATE (SELL)"
     volatility_formatted = f"{volatility:.2f}%"
     
     factors_text = "\n".join([f"• {f}" for f in signal.get('key_factors', [])])
@@ -160,11 +157,11 @@ async def send_telegram_alert(chat_id: int, signal: dict):
         "inline_keyboard": [
             [
                 {
-                    "text": "⚡ Route via SoDEX", 
+                    "text": "⚡ Execute Vault Rebalance", 
                     "callback_data": callback_data_approve
                 },
                 {
-                    "text": "❌ Dismiss", 
+                    "text": "❌ Dismiss Signal", 
                     "callback_data": f"reject_{clean_asset}"
                 }
             ]
@@ -172,14 +169,14 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     }
     
     alert_text = (
-        f"🎯 **New AI Trade Setup Discovered**\n\n"
-        f"🪙 **Asset:** {signal['asset']}\n"
-        f"⚡ **Action:** {action_emoji}\n"
+        f"🏦 **Vault Rebalance Triggered**\n\n"
+        f"🪙 **Index Target:** {signal['asset']}\n"
+        f"⚡ **Strategy:** {action_emoji}\n"
         f"🧠 **AI Confidence:** {adjusted_confidence}%\n"
         f"{confidence_bar}\n\n"
-        f"📖 **The Logic (Why?):**\n_{signal['rationale']}_\n\n"
-        f"🔍 **Key Catalysts:**\n{factors_text}\n\n"
-        f"📊 **Risk (24h Volatility):** {volatility_formatted}\n"
+        f"📖 **Macro Catalyst:**\n_{signal['rationale']}_\n\n"
+        f"🔍 **Key Factors:**\n{factors_text}\n\n"
+        f"📊 **Sector Volatility (24h):** {volatility_formatted}\n"
     )
     
     payload = {
@@ -192,7 +189,7 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload)
 
-# --- NEW KPI CALCULATION FUNCTIONS ---
+# --- KPI CALCULATION FUNCTIONS ---
 
 def calculate_win_rate(pnls: list[float]) -> float:
     if not pnls:
