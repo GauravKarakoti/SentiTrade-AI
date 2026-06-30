@@ -49,16 +49,22 @@ Set "signal_type" to "SECTOR".
 If the narrative is highly specific to a single asset, target its ticker (e.g., "$BTC", "$SOL", "$ETH").
 Set "signal_type" to "TOKEN".
 
-Output a strict JSON object with a single key "data", holding an array of action objects.
+Output a strict JSON object with a single root key "data", holding an array of action objects.
 Each object MUST contain:
-- "signal_type": "TOKEN" or "SECTOR"
-- "asset": The exact string of the asset or index (e.g., "$MAG7.ssi" or "$BTC")
-- "sentiment": "bullish" (Triggers BUY function) or "bearish" (Triggers SELL function)
-- "confidence": Integer 0-100. Must be > 85 to trigger a trade/rebalance.
-- "narrative_tags": array of relevant tags (e.g., "DeFi Index Allocation", "Macro Shift")
-- "rationale": A crisp, 1-sentence explanation of the catalyst.
-- "key_factors": Array of 2-3 specific catalysts (e.g., "Institutional inflow detected").
-- "source_headline": The exact title of the primary article driving this sentiment.
+{{
+  "data": [
+    {{
+      "signal_type": "TOKEN" or "SECTOR",
+      "asset": The exact string of the asset or index (e.g., "$MAG7.ssi" or "$BTC"),
+      "sentiment": "bullish" (Triggers BUY function) or "bearish" (Triggers SELL function),
+      "confidence": Integer 0-100. Must be > 85 to trigger a trade/rebalance,
+      "narrative_tags": array of relevant tags (e.g., "DeFi Index Allocation", "Macro Shift"),
+      "rationale": A crisp, 1-sentence explanation of the catalyst,
+      "key_factors": Array of 2-3 specific catalysts (e.g., "Institutional inflow detected"),
+      "source_headline": The exact title of the primary article driving this sentiment
+    }}
+  ]
+}}
 
 News Feed:
 {chr(10).join(articles)}
@@ -93,14 +99,22 @@ def analyze_with_llm(prompt: str) -> list[dict]:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are a precise JSON responder. Always format your response as a valid JSON object containing a 'data' array."},
+                {"role": "system", "content": "You are a precise JSON responder. Always format your response as a valid JSON object strictly containing a 'data' array at the root."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.1,
             response_format={"type": "json_object"}
         )
         raw = completion.choices[0].message.content
-        data = json.loads(raw)
+        
+        # Defense mechanism: Strip markdown if the LLM hallucinates backticks despite json_object constraint
+        raw_clean = raw.strip()
+        if raw_clean.startswith("```json"):
+            raw_clean = raw_clean[7:-3].strip()
+        elif raw_clean.startswith("```"):
+            raw_clean = raw_clean[3:-3].strip()
+
+        data = json.loads(raw_clean)
         
         extracted_list = []
         if isinstance(data, dict):
@@ -114,8 +128,12 @@ def analyze_with_llm(prompt: str) -> list[dict]:
                         extracted_list = v
                         break
         
+        # Defensive type-checking to prevent Pydantic crashes on strings
         return [item for item in extracted_list if isinstance(item, dict)]
         
+    except json.JSONDecodeError as e:
+        print(f"JSON Parsing Error: {e} | Raw string: {raw}")
+        return []
     except Exception as e:
         print(f"LLM Parsing Error: {e}")
         return []

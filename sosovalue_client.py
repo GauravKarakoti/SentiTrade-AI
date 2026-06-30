@@ -9,7 +9,11 @@ REDIS_URL = os.getenv("REDIS_URL")
 SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
 SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL")
 
-redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+redis_client = Redis.from_url(
+    REDIS_URL, 
+    decode_responses=True,
+    ssl_cert_reqs="none"
+)
 
 # Rate limiter params
 RATE_LIMIT_CAPACITY = 10
