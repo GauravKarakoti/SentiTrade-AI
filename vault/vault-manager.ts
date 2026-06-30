@@ -13,16 +13,15 @@ const PRIVATE_KEY = process.env.EXECUTOR_PRIVATE_KEY!;
 const VAULT_ADDRESS = process.env.VAULT_ADDRESS!;
 
 const SSI_CONTRACTS: Record<string, string> = {
-    "$MAG7.ssi": "0xe52d83b637c24fFEE719D64262C99C30818EB18e",
-    "$DEFI.ssi": "0xA9D588Ede1917D1Bc269017e3F7266a9c5113Fc1",
-    "$MEME.ssi": "0xA5F6A1cAF5517165b5Ff502d6872e83E922b0bff"
+    "$MAG7.ssi": "0x4b54c91aF949F06B853460018CdCd79369F333e4",
+    "$DEFI.ssi": "0xdA9f3bdb44B9e2f0A71291ccE879eabD1fF06f2B",
+    "$MEME.ssi": "0x26E6800068Ea06D036Ae1C90db0bc1b1a9e3233C"
 };
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const vaultContract = new ethers.Contract(VAULT_ADDRESS, VaultABI, wallet);
 
-// --- NEW PORTFOLIO ENDPOINT ---
 app.get('/api/vault-balance/:address', async (req, res) => {
     try {
         const userAddress = req.params.address;
@@ -56,17 +55,14 @@ app.get('/api/vault-status', async (req, res) => {
         let dynamicTotalAssets = usdcBalance; 
         const allocations: any[] = [];
         
-        // Official SoSoValue Base NAV is $10.00
         const BASE_NAV_PRICE = 10_000_000n; // 10.00 USDC (6 decimals)
         
         for (const [name, address] of Object.entries(SSI_CONTRACTS)) {
             const indexContract = new ethers.Contract(address, ["function balanceOf(address) view returns(uint256)"], provider);
             
-            // Balances are now strictly 18 decimals based on the updated Mock
             const bal = await indexContract.balanceOf(VAULT_ADDRESS);
             
             if (bal > 0n) {
-                // Formula: (Index Shares * Base NAV) / 10^18
                 const valueInUsdc = (bal * BASE_NAV_PRICE) / (10n ** 18n);
                 
                 dynamicTotalAssets += valueInUsdc;
@@ -97,12 +93,25 @@ app.get('/api/vault-status', async (req, res) => {
     }
 });
 
-// --- EXISTING REBALANCE ENDPOINT ---
 app.post('/api/execute-rebalance', async (req, res) => {
-    const { asset, action, confidence } = req.body;
+    const { asset, action, confidence, callerAddress } = req.body;
 
     if (confidence < 85) {
         return res.status(400).json({ error: "Confidence too low for rebalance." });
+    }
+
+    // --- NEW SECTOR-GATING LOGIC ---
+    if (callerAddress) {
+        if (!ethers.isAddress(callerAddress)) {
+            return res.status(400).json({ error: "Invalid caller Ethereum address format." });
+        }
+        
+        const shareBalance = await vaultContract.balanceOf(callerAddress);
+        if (shareBalance === 0n) {
+            return res.status(403).json({ error: "Access Denied: Only vSENTI shareholders can execute vault trades." });
+        }
+    } else {
+        return res.status(403).json({ error: "Access Denied: Caller address missing." });
     }
 
     const indexAddress = SSI_CONTRACTS[asset];
@@ -111,11 +120,11 @@ app.post('/api/execute-rebalance', async (req, res) => {
     }
 
     try {
-        console.log(`[Tx] Initiating Vault Rebalance: ${action} ${asset}`);
+        console.log(`[Tx] Initiating Vault Rebalance: ${action} ${asset} by ${callerAddress}`);
         
         let tx;
         if (action === "BUY") {
-            const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"; // Base Sepolia USDC Address
+            const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
             const usdcContract = new ethers.Contract(USDC_ADDRESS, ["function balanceOf(address) view returns(uint256)"], provider);
             
             const idleUsdcBalance = await usdcContract.balanceOf(VAULT_ADDRESS);

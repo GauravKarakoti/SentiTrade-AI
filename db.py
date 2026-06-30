@@ -19,6 +19,10 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
     chat_id = Column(BigInteger, primary_key=True, index=True)
+    
+    # --- NEW: Maps Telegram users to EVM addresses for Vault Governance ---
+    wallet_address = Column(String(42), nullable=True, index=True) 
+    
     is_active = Column(Boolean, default=True)
     is_subscribed = Column(Boolean, default=False) 
     subscription_end = Column(DateTime, nullable=True)

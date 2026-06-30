@@ -8,6 +8,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 class SentimentAnalysis(BaseModel):
+    signal_type: str # "TOKEN" or "SECTOR"
     asset: str
     sentiment: str
     confidence: int
@@ -26,27 +27,35 @@ def build_prompt(news_batch: list[dict]) -> str:
         
         articles.append(f"- {headline} (Sectors: {sectors_str}) | Content: {content}")
         
-        # Increased context window to 15 to catch broader macro trends
         if len(articles) >= 15:
             break
 
     return f"""
-You are the SentiTrade AI, an autonomous asset manager operating a tokenized copy-trading vault. 
-Analyze the following financial data to determine if a macro-economic sector rotation is required.
+You are the SentiTrade AI, an autonomous asset manager. 
+Analyze the following financial data to determine if a trade signal or macro-economic sector rotation is required.
 
-CRITICAL INSTRUCTION - SSI INDEX ROUTING:
-You are managing an Ethereum ERC-4626 vault. You do not buy individual tokens. You ONLY allocate capital into SoSoValue Index (SSI) tokens to achieve passive, sector-wide exposure.
+CRITICAL INSTRUCTION - DUAL ROUTING:
+You must classify the sentiment as either affecting a broad macro SECTOR or a specific TOKEN.
+
+1. SECTOR SIGNALS:
+If the narrative affects a whole sector, route to SoSoValue Index (SSI) tokens to achieve passive, sector-wide exposure.
 - For AI/Tech/Broad Bullishness: route to "$MAG7.ssi"
 - For on-chain finance dominance: route to "$DEFI.ssi"
 - For high-risk speculation waves: route to "$MEME.ssi"
+Set "signal_type" to "SECTOR".
+
+2. TOKEN SIGNALS:
+If the narrative is highly specific to a single asset, target its ticker (e.g., "$BTC", "$SOL", "$ETH").
+Set "signal_type" to "TOKEN".
 
 Output a strict JSON object with a single key "data", holding an array of action objects.
 Each object MUST contain:
-- "asset": The exact string "$MAG7.ssi", "$DEFI.ssi", or "$MEME.ssi"
+- "signal_type": "TOKEN" or "SECTOR"
+- "asset": The exact string of the asset or index (e.g., "$MAG7.ssi" or "$BTC")
 - "sentiment": "bullish" (Triggers BUY function) or "bearish" (Triggers SELL function)
-- "confidence": Integer 0-100. Must be > 85 to trigger a vault rebalance.
+- "confidence": Integer 0-100. Must be > 85 to trigger a trade/rebalance.
 - "narrative_tags": array of relevant tags (e.g., "DeFi Index Allocation", "Macro Shift")
-- "rationale": A crisp, 1-sentence explanation of the macro catalyst driving this rebalance.
+- "rationale": A crisp, 1-sentence explanation of the catalyst.
 - "key_factors": Array of 2-3 specific catalysts (e.g., "Institutional inflow detected").
 - "source_headline": The exact title of the primary article driving this sentiment.
 
@@ -117,9 +126,9 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
             continue 
         try:
             sa = SentimentAnalysis(**a)
-            # Vault logic requires strict confidence threshold (>= 85) to avoid over-trading
             if sa.confidence >= 85 and sa.sentiment in ("bullish", "bearish"):
                 signals.append({
+                    "signal_type": sa.signal_type.upper(),
                     "asset": sa.asset,
                     "action": "BUY" if sa.sentiment == "bullish" else "SELL",
                     "confidence": sa.confidence,
@@ -131,7 +140,7 @@ def generate_signals(analyses: list[dict]) -> list[dict]:
             continue
     return signals
 
-async def send_telegram_alert(chat_id: int, signal: dict):
+async def send_telegram_alert(chat_id: int, signal: dict, is_sector: bool = True):
     if not TELEGRAM_BOT_TOKEN:
         return
     
@@ -148,36 +157,49 @@ async def send_telegram_alert(chat_id: int, signal: dict):
     
     action_emoji = "🟢 ALLOCATE (BUY)" if signal['action'].upper() == "BUY" else "🔴 LIQUIDATE (SELL)"
     volatility_formatted = f"{volatility:.2f}%"
-    
     factors_text = "\n".join([f"• {f}" for f in signal.get('key_factors', [])])
     
-    callback_data_approve = f"approve_{clean_asset}_{signal['action']}_{adjusted_confidence}"
-    
-    keyboard = {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "⚡ Execute Vault Rebalance", 
-                    "callback_data": callback_data_approve
-                },
-                {
-                    "text": "❌ Dismiss Signal", 
-                    "callback_data": f"reject_{clean_asset}"
-                }
+    if is_sector:
+        callback_data_approve = f"approve_vault_{clean_asset}_{signal['action']}_{adjusted_confidence}"
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "⚡ Vote to Execute Vault Rebalance", "callback_data": callback_data_approve},
+                    {"text": "❌ Dismiss", "callback_data": f"reject_{clean_asset}"}
+                ]
             ]
-        ]
-    }
-    
-    alert_text = (
-        f"🏦 **Vault Rebalance Triggered**\n\n"
-        f"🪙 **Index Target:** {signal['asset']}\n"
-        f"⚡ **Strategy:** {action_emoji}\n"
-        f"🧠 **AI Confidence:** {adjusted_confidence}%\n"
-        f"{confidence_bar}\n\n"
-        f"📖 **Macro Catalyst:**\n_{signal['rationale']}_\n\n"
-        f"🔍 **Key Factors:**\n{factors_text}\n\n"
-        f"📊 **Sector Volatility (24h):** {volatility_formatted}\n"
-    )
+        }
+        alert_text = (
+            f"🏦 **Gated Vault Rebalance Triggered**\n\n"
+            f"🪙 **Index Target:** {signal['asset']}\n"
+            f"⚡ **Strategy:** {action_emoji}\n"
+            f"🧠 **AI Confidence:** {adjusted_confidence}%\n"
+            f"{confidence_bar}\n\n"
+            f"📖 **Macro Catalyst:**\n_{signal['rationale']}_\n\n"
+            f"🔍 **Key Factors:**\n{factors_text}\n\n"
+            f"📊 **Sector Volatility (24h):** {volatility_formatted}\n"
+            f"🔒 _Only vSENTI holders can authorize this execution._"
+        )
+    else:
+        callback_data_approve = f"approve_token_{clean_asset}_{signal['action']}_{adjusted_confidence}"
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "📈 Trade on SoDEX", "callback_data": callback_data_approve},
+                    {"text": "❌ Dismiss", "callback_data": f"reject_{clean_asset}"}
+                ]
+            ]
+        }
+        alert_text = (
+            f"🚀 **Public Crypto Alert**\n\n"
+            f"🪙 **Token Target:** {signal['asset']}\n"
+            f"⚡ **Signal:** {action_emoji}\n"
+            f"🧠 **AI Confidence:** {adjusted_confidence}%\n"
+            f"{confidence_bar}\n\n"
+            f"📖 **Reasoning:**\n_{signal['rationale']}_\n\n"
+            f"🔍 **Key Factors:**\n{factors_text}\n\n"
+            f"📊 **Token Volatility (24h):** {volatility_formatted}\n"
+        )
     
     payload = {
         "chat_id": chat_id,

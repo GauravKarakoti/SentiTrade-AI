@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-// FIX: Updated to uint256 to match the actual Router signature
 interface ISSIProtocol {
     function mint(address indexToken, uint256 amount) external returns (uint256);
     function redeem(address indexToken, uint256 shares) external returns (uint256);
@@ -26,23 +25,28 @@ contract SentiTradeVault is ERC4626, Ownable {
         ssiRouter = ISSIProtocol(_ssiRouter);
     }
 
+    // New Modifier: Restricts execution to vSENTI holders or the system owner 
+    modifier onlyShareholderOrOwner() {
+        require(balanceOf(msg.sender) > 0 || msg.sender == owner(), "Not authorized: Must hold vSENTI shares");
+        _;
+    }
+
     function setApprovedIndex(address _index, bool _status) external onlyOwner {
         approvedIndices[_index] = _status;
     }
 
-    function executeBullishRebalance(address indexToken, uint256 assetAmount) external onlyOwner {
+    function executeBullishRebalance(address indexToken, uint256 assetAmount) external onlyShareholderOrOwner {
         require(approvedIndices[indexToken], "Index not approved");
         
         // Approve router to spend vault's idle USDC
         IERC20(asset()).approve(address(ssiRouter), assetAmount);
         
-        // FIX: Removed the uint200() casting
         ssiRouter.mint(indexToken, assetAmount);
         
         emit Rebalanced(indexToken, assetAmount, "BUY_INDEX");
     }
 
-    function executeBearishRebalance(address indexToken, uint256 indexShares) external onlyOwner {
+    function executeBearishRebalance(address indexToken, uint256 indexShares) external onlyShareholderOrOwner {
         require(approvedIndices[indexToken], "Index not approved");
         
         // Redeem SSI index token back for USDC
