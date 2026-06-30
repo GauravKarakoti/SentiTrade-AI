@@ -27,8 +27,8 @@ from sosovalue_client import (
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MINI_APP_URL = os.getenv("MINI_APP_URL")
 SODEX_SPOT_API = os.getenv("SODEX_SPOT_API", "https://mainnet-gw.sodex.dev/api/v1/spot")
-VAULT_MANAGER_URL = os.getenv("VAULT_MANAGER_URL", "http://localhost:3000")
-VAULT_ADDRESS = os.getenv("VAULT_ADDRESS", "0x0000000000000000000000000000000000000000")
+VAULT_MANAGER_URL = os.getenv("VAULT_MANAGER_URL")
+VAULT_ADDRESS = os.getenv("VAULT_ADDRESS")
 
 SSI_CONTRACTS = {
     "MAG7.ssi": "0x9E6A46f294bB67c20F1D1E7AfB0bBEf614403B55",
@@ -524,8 +524,20 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             
         elif text == "/dashboard":
             web_app_url = f"{MINI_APP_URL}?intent=dashboard"
-            keyboard = {"inline_keyboard": [[{"text": "📊 Open Performance Dashboard", "web_app": {"url": web_app_url}}]]}
-            await send_direct_message(chat_id, "📈 **SentiTrade-AI Performance Dashboard**\n\nView real-time agent metrics, equity curve, and win rate.", reply_markup=keyboard)
+            frontend_url = "https://senti-trade-ai-pi.vercel.app"
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "📱 Open Mini App", "web_app": {"url": web_app_url}}],
+                    [{"text": "🌐 Open in Web Browser", "url": frontend_url}]
+                ]
+            }
+
+            await send_direct_message(
+                chat_id, 
+                "📈 **SentiTrade-AI Performance Dashboard**\n\nSelect how you would like to view real-time agent metrics, equity curve, and win rate:", 
+                reply_markup=keyboard
+            )
 
         elif text == "/vault":
             await send_direct_message(chat_id, "🔍 **Fetching on-chain Vault data...**")
@@ -757,6 +769,7 @@ async def send_direct_message(chat_id: int, text: str, reply_markup: dict = None
         payload["reply_markup"] = json.dumps(reply_markup)
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload)
+        print("Posted", payload)
 
 async def delete_telegram_message(chat_id: int, message_id: int):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage"

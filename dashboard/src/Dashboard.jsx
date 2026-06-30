@@ -152,6 +152,18 @@ export default function Dashboard() {
           <span className="px-3 py-1.5 rounded-full bg-slate-900/50 border border-slate-800/50 text-xs font-mono text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.1)]">
             LLM: Groq
           </span>
+          <a
+            href="https://t.me/SentiTradeAIBot" // Replace with your actual bot username
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-medium rounded-lg transition-colors shadow-sm text-sm"
+          >
+            {/* Telegram Icon */}
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M11.944 0C5.344 0 0 5.344 0 12c0 5.622 3.88 10.312 9.042 11.65.596.11.814-.258.814-.574 0-.281-.01-1.028-.014-2.016-3.737.812-4.525-1.802-4.525-1.802-.61-1.552-1.492-1.966-1.492-1.966-1.218-.832.092-.816.092-.816 1.348.094 2.057 1.384 2.057 1.384 1.196 2.05 3.136 1.458 3.9 1.115.122-.867.47-1.458.852-1.794-2.984-.34-6.12-1.492-6.12-6.64 0-1.467.524-2.667 1.385-3.607-.14-.34-.6-1.706.13-3.556 0 0 1.128-.362 3.7 1.378 1.073-.298 2.222-.447 3.366-.452 1.142.005 2.293.154 3.367.452 2.57-1.74 3.696-1.378 3.696-1.378.732 1.85.272 3.216.132 3.556.863.94 1.383 2.14 1.383 3.607 0 5.16-3.14 6.297-6.134 6.63.482.415.914 1.235.914 2.49 0 1.798-.016 3.248-.016 3.69 0 .32.214.69.82.57C20.124 22.308 24 17.62 24 12c0-6.656-5.344-12-12.056-12z"/>
+            </svg>
+            Open Telegram Bot
+          </a>
         </div>
       </header>
 
