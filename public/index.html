@@ -405,6 +405,20 @@
             document.getElementById('historicalContextCard').style.display = 'none';
             document.getElementById('riskWarning').style.display = 'none';
             document.getElementById('aiLogicCard').style.display = 'none';
+        } else if (txParams.intent === 'subscribe') {
+            elActionLabel.innerText = "Premium Subscription";
+            elAmountDisplay.innerText = "15.00";
+            elTokenDisplay.innerText = "USDC / Month";
+            btnAction.innerText = "Connect Wallet";
+
+            document.getElementById('depositUI').style.display = 'none';
+            document.getElementById('aiIntelligenceCard').style.display = 'none';
+            document.getElementById('sosovalue-index').style.display = 'none';
+            document.getElementById('historicalContextCard').style.display = 'none';
+            document.getElementById('riskWarning').style.display = 'none';
+            document.getElementById('aiLogicCard').style.display = 'none';
+            
+            document.getElementById('securityNotice').innerText = "🔒 Secure 1-month premium subscription via Base network. Payment goes directly to the Treasury address.";
         } else {
             if (txParams.asset !== 'Unknown') {
                 document.getElementById('aiIntelligenceCard').style.display = 'block';
@@ -502,6 +516,12 @@
                     btnAction.classList.remove('btn-primary');
                     btnAction.classList.add('bg-purple-500', 'hover:bg-purple-600', 'text-white');
                     document.getElementById('statusBadge').innerText = "Wallet Linked";
+                } else if (txParams.intent === 'subscribe') {
+                    // NEW: Subscribe Button State
+                    btnAction.innerHTML = `Pay 15 USDC <span class="ml-1">💎</span>`;
+                    btnAction.classList.remove('btn-primary');
+                    btnAction.classList.add('bg-blue-500', 'hover:bg-blue-600', 'text-white');
+                    document.getElementById('statusBadge').innerText = "Wallet Linked";
                 } else {
                     btnAction.innerHTML = `Confirm Execution <span class="ml-1">✍️</span>`;
                     btnAction.classList.remove('btn-primary');
@@ -527,6 +547,9 @@
                         await executeVaultDeposit();
                     } else if (txParams.intent === 'redeem') {
                         await executeVaultRedeem(); // ADD THIS
+                    } else if (txParams.intent === 'subscribe') {
+                        // NEW: Route to subscription execution
+                        await executeSubscription(); 
                     }
                 } catch (err) {
                     console.error("Wallet modal error:", err);
@@ -535,6 +558,61 @@
                     btnAction.innerHTML = originalText;
                 }
             });
+        }
+
+        async function executeSubscription() {
+            if (!walletProvider) return;
+            
+            btnAction.disabled = true;
+            btnAction.innerHTML = `<div class="loader"></div>`;
+            document.getElementById('statusText').innerText = "Please confirm the Payment in your wallet...";
+            document.getElementById('statusText').classList.remove('text-red-400', 'text-emerald-400');
+            
+            try {
+                const ethersProvider = new BrowserProvider(walletProvider);
+                const signer = await ethersProvider.getSigner();
+                
+                const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; 
+                
+                const TREASURY_WALLET = "0xA292c308Bf0054c0c8b85bA5872499533343483a"; 
+                
+                // Parse 15 USDC with 6 decimal places
+                const parsedAmount = parseUnits("15", 6); 
+                
+                // Only need the standard ERC-20 transfer ABI
+                const usdcAbi = ["function transfer(address to, uint256 amount) public returns (bool)"];
+                const usdcContract = new Contract(USDC_ADDRESS, usdcAbi, signer);
+                
+                // Execute the direct transfer
+                const txTransfer = await usdcContract.transfer(TREASURY_WALLET, parsedAmount);
+                document.getElementById('statusText').innerText = "Waiting for Payment confirmation on chain...";
+                await txTransfer.wait();
+                
+                document.getElementById('statusText').innerText = "Payment Successful! Premium activated.";
+                document.getElementById('statusText').classList.add('text-emerald-400');
+                btnAction.innerText = "Done";
+                
+                // Send success ping to the Python Webhook
+                tg.sendData(JSON.stringify({ 
+                    status: 'subscribed',
+                    tx_hash: txTransfer.hash
+                }));
+                
+                setTimeout(() => tg.close(), 1500);
+
+            } catch (error) {
+                console.error("Subscription error:", error);
+                btnAction.disabled = false;
+                btnAction.innerHTML = `Retry Payment <span class="ml-1">🔄</span>`;
+                
+                let errorMsg = "Transaction failed or rejected by user.";
+                if (error.reason) errorMsg = error.reason;
+                else if (error.shortMessage) errorMsg = error.shortMessage;
+                else if (error.message) errorMsg = error.message.split('\n')[0];
+                
+                document.getElementById('statusText').innerText = `Error: ${errorMsg}`;
+                document.getElementById('statusText').classList.add('text-red-400');
+            }
         }
 
         async function executeVaultRedeem() {

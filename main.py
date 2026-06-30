@@ -18,7 +18,7 @@ from bot_logic import (
     build_prompt, analyze_with_llm, generate_signals, 
     send_telegram_alert, generate_chat_reply, 
     calculate_win_rate, calculate_roi, calculate_max_drawdown,
-    calculate_profit_factor, calculate_sharpe_ratio # Added new imports
+    calculate_profit_factor, calculate_sharpe_ratio
 )
 from sosovalue_client import (
     fetch_news_from_api, deduplicate_and_categorize, fetch_market_snapshot
@@ -78,13 +78,11 @@ async def log_to_db(message: str, level: str = "INFO"):
 
 @app.get("/api/logs")
 async def get_system_logs(db: AsyncSession = Depends(get_db)):
-    # Fetch the 20 most recent logs
     result = await db.execute(
         select(SystemLog).order_by(SystemLog.timestamp.desc()).limit(20)
     )
     records = result.scalars().all()
     
-    # Reverse them so the UI shows the oldest at the top, scrolling down to the newest
     return [
         f"[{r.timestamp.strftime('%H:%M:%S')}] {r.message}"
         for r in reversed(records)
@@ -92,7 +90,6 @@ async def get_system_logs(db: AsyncSession = Depends(get_db)):
 
 @app.get("/api/signals")
 async def get_recent_signals(db: AsyncSession = Depends(get_db)):
-    # Fetch the 6 most recent signals from the database
     result = await db.execute(
         select(ValueChainAnalytics)
         .order_by(ValueChainAnalytics.timestamp.desc())
@@ -139,12 +136,12 @@ async def get_performance_metrics(db: AsyncSession = Depends(get_db)):
             "win_rate": calculate_win_rate(pnls),
             "roi": calculate_roi(1000.0, current_equity),
             "max_drawdown": calculate_max_drawdown(equity_curve),
-            "profit_factor": calculate_profit_factor(pnls), # Added metric
-            "sharpe_ratio": calculate_sharpe_ratio(pnls),   # Added metric
+            "profit_factor": calculate_profit_factor(pnls), 
+            "sharpe_ratio": calculate_sharpe_ratio(pnls),   
             "total_trades": len(pnls)
         },
         "equity_curve": equity_curve,
-        "trade_pnls": pnls # Added raw data for distribution chart
+        "trade_pnls": pnls 
     }
 
 async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
@@ -389,13 +386,20 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             )
             
         elif data == "cmd_subscribe":
-            result = await db.execute(select(User).filter(User.chat_id == chat_id))
-            user = result.scalar_one_or_none()
-            if user:
-                user.is_subscribed = True
-                await db.commit()
-            await answer_callback_query(callback_id, "Subscribed!")
-            await send_direct_message(chat_id, "🎉 **Subscription Activated!** You will now receive agentic SoDEX trade signals.")
+            await answer_callback_query(callback_id)
+            query_params = urllib.parse.urlencode({
+                "intent": "subscribe", 
+                "chain": "base", 
+                "chainId": "8453", # Mainnet
+                "amount": "15"
+            })
+            web_app_url = f"{MINI_APP_URL}?{query_params}"
+            keyboard = {"inline_keyboard": [[{"text": "💎 Pay 15 USDC / Month", "web_app": {"url": web_app_url}}]]}
+            await send_direct_message(
+                chat_id, 
+                "⭐️ **Unlock SentiTrade Premium**\n\nPay 15 USDC on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
+                reply_markup=keyboard
+            )
             
         elif data == "cmd_help":
             await answer_callback_query(callback_id, "Loading help...")
@@ -411,14 +415,31 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             status = web_app_payload.get("status")
             user_address = web_app_payload.get("address")
 
-            if user_address and status in ["deposited", "connected"]:
+            if user_address and status in ["deposited", "connected", "subscribed"]:
                 result = await db.execute(select(User).filter(User.chat_id == chat_id))
                 user = result.scalar_one_or_none()
-                if user:
+                if user and status != "subscribed":
                     setattr(user, 'wallet_address', user_address)
                     await db.commit()
 
-            if status == "deposited":
+            if status == "subscribed":
+                tx_hash = web_app_payload.get("tx_hash", "Unknown")
+                
+                result = await db.execute(select(User).filter(User.chat_id == chat_id))
+                user = result.scalar_one_or_none()
+                if user:
+                    user.is_subscribed = True
+                    user.subscription_end = datetime.utcnow() + timedelta(days=30)
+                    await db.commit()
+                
+                explorer_link = f"https://basescan.org/tx/{tx_hash}"
+                await send_direct_message(
+                    chat_id, 
+                    f"🎉 **Premium Activated!**\n\nPayment verified on-chain. You will now receive all agentic ValueChain trade signals for the next 30 days.\n🔗 [View Receipt on Basescan]({explorer_link})"
+                )
+                return {"status": "ok"}
+
+            elif status == "deposited":
                 amount = web_app_payload.get("amount", "0")
                 await send_direct_message(chat_id, f"✅ **Deposit Confirmed!**\n\nSuccessfully deposited **{amount} USDC** from `{user_address[:6]}...{user_address[-4:]}` into the SentiTrade Vault.")
                 return {"status": "ok"}
@@ -650,12 +671,19 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 await send_direct_message(chat_id, "Agent offline. You have opted out of the ValueChain stream.")
         
         elif text == "/subscribe":
-            result = await db.execute(select(User).filter(User.chat_id == chat_id))
-            user = result.scalar_one_or_none()
-            if user:
-                user.is_subscribed = True 
-                await db.commit()
-                await send_direct_message(chat_id, "🎉 **Subscription Activated!** You will now receive agentic SoDEX trade signals.")
+            query_params = urllib.parse.urlencode({
+                "intent": "subscribe", 
+                "chain": "base", 
+                "chainId": "8453", # Mainnet
+                "amount": "15"
+            })
+            web_app_url = f"{MINI_APP_URL}?{query_params}"
+            keyboard = {"inline_keyboard": [[{"text": "💎 Pay 15 USDC / Month", "web_app": {"url": web_app_url}}]]}
+            await send_direct_message(
+                chat_id, 
+                "⭐️ **Unlock SentiTrade Premium**\n\nPay 15 USDC on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
+                reply_markup=keyboard
+            )
         
         elif text.startswith("/volatility"):
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
