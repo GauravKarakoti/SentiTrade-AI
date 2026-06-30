@@ -17,7 +17,8 @@ from db import init_db, get_db, AsyncSessionLocal, User, ValueChainAnalytics
 from bot_logic import (
     build_prompt, analyze_with_llm, generate_signals, 
     send_telegram_alert, generate_chat_reply, 
-    calculate_win_rate, calculate_roi, calculate_max_drawdown
+    calculate_win_rate, calculate_roi, calculate_max_drawdown,
+    calculate_profit_factor, calculate_sharpe_ratio # Added new imports
 )
 from sosovalue_client import (
     fetch_news_from_api, deduplicate_and_categorize, fetch_market_snapshot
@@ -92,9 +93,12 @@ async def get_performance_metrics(db: AsyncSession = Depends(get_db)):
             "win_rate": calculate_win_rate(pnls),
             "roi": calculate_roi(1000.0, current_equity),
             "max_drawdown": calculate_max_drawdown(equity_curve),
+            "profit_factor": calculate_profit_factor(pnls), # Added metric
+            "sharpe_ratio": calculate_sharpe_ratio(pnls),   # Added metric
             "total_trades": len(pnls)
         },
-        "equity_curve": equity_curve
+        "equity_curve": equity_curve,
+        "trade_pnls": pnls # Added raw data for distribution chart
     }
 
 async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
@@ -192,7 +196,6 @@ async def perform_analysis(db: AsyncSession):
                 for user in target_users:
                     if volatility <= user["vol_guard"]:
                         if signal.get("signal_type") == "SECTOR":
-                            # Gated Route: Verify on-chain vSENTI holding
                             if not user.get("wallet"):
                                 continue 
                             try:
@@ -203,7 +206,6 @@ async def perform_analysis(db: AsyncSession):
                             except Exception as e:
                                 print(f"Vault balance check failed: {e}")
                         else:
-                            # Public Route: Direct Token Alert
                             await send_telegram_alert(user["chat_id"], signal, is_sector=False)
                             
             except Exception as e:
@@ -359,7 +361,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             status = web_app_payload.get("status")
             user_address = web_app_payload.get("address")
 
-            # Map the user's wallet address in the DB to allow for Sector gating later
             if user_address and status in ["deposited", "connected"]:
                 result = await db.execute(select(User).filter(User.chat_id == chat_id))
                 user = result.scalar_one_or_none()
