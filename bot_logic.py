@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import httpx
 from groq import Groq
@@ -236,3 +237,40 @@ def calculate_max_drawdown(equity_curve: list[float]) -> float:
         if drawdown > max_dd:
             max_dd = drawdown
     return max_dd * 100
+
+# --- ADVANCED KPI CALCULATION FUNCTIONS ---
+
+def calculate_profit_factor(pnls: list[float]) -> float:
+    """Calculates the ratio of gross profit to gross loss."""
+    gross_profit = sum(p for p in pnls if p > 0)
+    gross_loss = abs(sum(p for p in pnls if p < 0))
+    if gross_loss == 0:
+        return float('inf') if gross_profit > 0 else 0.0
+    return gross_profit / gross_loss
+
+def calculate_sharpe_ratio(pnls: list[float], risk_free_rate: float = 0.0) -> float:
+    """Calculates risk-adjusted return (assuming daily trades for the multiplier)."""
+    if len(pnls) < 2:
+        return 0.0
+    
+    mean_pnl = sum(pnls) / len(pnls)
+    excess_return = mean_pnl - risk_free_rate
+    
+    # Calculate standard deviation of returns
+    variance = sum((p - mean_pnl) ** 2 for p in pnls) / (len(pnls) - 1)
+    std_dev = math.sqrt(variance)
+    
+    if std_dev == 0:
+        return 0.0
+        
+    # Annualize assuming approx 252 trading days/signals a year
+    return (excess_return / std_dev) * math.sqrt(252)
+
+def calculate_avg_win_loss(pnls: list[float]) -> dict:
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = sum(losses) / len(losses) if losses else 0.0
+    
+    return {"avg_win": avg_win, "avg_loss": avg_loss}

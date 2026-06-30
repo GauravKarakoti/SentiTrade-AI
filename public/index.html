@@ -71,15 +71,33 @@
                         <span class="block text-[10px] text-slate-400 uppercase tracking-widest">Win Rate</span>
                         <span id="globalWinRate" class="text-xl font-bold text-cyan-400">--%</span>
                     </div>
-                    <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 col-span-2">
-                        <span class="block text-[10px] text-slate-400 uppercase tracking-widest">Max Drawdown</span>
-                        <span id="globalDrawdown" class="text-lg font-bold text-red-400">--%</span>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2 text-center">
+                    <div class="bg-slate-800/80 p-2 rounded-xl border border-slate-700">
+                        <span class="block text-[9px] text-slate-400 uppercase tracking-widest">Max Drawdown</span>
+                        <span id="globalDrawdown" class="text-sm font-bold text-red-400">--%</span>
+                    </div>
+                    <div class="bg-slate-800/80 p-2 rounded-xl border border-slate-700">
+                        <span class="block text-[9px] text-slate-400 uppercase tracking-widest">Profit Factor</span>
+                        <span id="globalProfitFactor" class="text-sm font-bold text-purple-400">--</span>
+                    </div>
+                    <div class="bg-slate-800/80 p-2 rounded-xl border border-slate-700">
+                        <span class="block text-[9px] text-slate-400 uppercase tracking-widest">Sharpe</span>
+                        <span id="globalSharpe" class="text-sm font-bold text-orange-400">--</span>
                     </div>
                 </div>
+
                 <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
                     <span class="block text-[10px] text-slate-400 uppercase tracking-widest mb-2">Simulated Equity Curve ($)</span>
                     <canvas id="equityChart" height="150"></canvas>
                 </div>
+                
+                <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+                    <span class="block text-[10px] text-slate-400 uppercase tracking-widest mb-2">Trade PnL Distribution (%)</span>
+                    <canvas id="distributionChart" height="100"></canvas>
+                </div>
+                
                 <p class="text-[10px] text-slate-500 text-center mt-2">Curve simulates a $1,000 starting portfolio risking 10% per signal.</p>
             </div>
 
@@ -262,12 +280,24 @@
             fetch('https://sentitrade-ai.onrender.com/api/metrics')
                 .then(res => res.json())
                 .then(data => {
+                    // Populate KPIs
                     document.getElementById('globalRoi').innerText = data.kpis.roi.toFixed(2) + '%';
                     document.getElementById('globalWinRate').innerText = data.kpis.win_rate.toFixed(2) + '%';
                     document.getElementById('globalDrawdown').innerText = data.kpis.max_drawdown.toFixed(2) + '%';
                     
-                    const ctx = document.getElementById('equityChart').getContext('2d');
-                    new Chart(ctx, {
+                    // Populate New Advanced KPIs (Assuming they are returned in the API)
+                    if(data.kpis.profit_factor) document.getElementById('globalProfitFactor').innerText = data.kpis.profit_factor.toFixed(2);
+                    if(data.kpis.sharpe_ratio) document.getElementById('globalSharpe').innerText = data.kpis.sharpe_ratio.toFixed(2);
+                    
+                    // 1. Enhanced Equity Curve (Line Chart)
+                    const ctxEquity = document.getElementById('equityChart').getContext('2d');
+                    
+                    // Create a beautiful gradient for the fill
+                    let gradientFill = ctxEquity.createLinearGradient(0, 0, 0, 150);
+                    gradientFill.addColorStop(0, 'rgba(79, 172, 254, 0.4)');
+                    gradientFill.addColorStop(1, 'rgba(79, 172, 254, 0.0)');
+
+                    new Chart(ctxEquity, {
                         type: 'line',
                         data: {
                             labels: data.equity_curve.map((_, i) => `T+${i}`),
@@ -275,22 +305,71 @@
                                 label: 'Simulated Equity ($)',
                                 data: data.equity_curve,
                                 borderColor: '#4facfe',
-                                backgroundColor: 'rgba(79, 172, 254, 0.1)',
+                                backgroundColor: gradientFill,
                                 borderWidth: 2,
                                 fill: true,
-                                pointRadius: 1,
-                                tension: 0.2
+                                pointRadius: 0, // Hide points for a cleaner institutional look
+                                pointHoverRadius: 4,
+                                tension: 0.3 // Smooth curves
                             }]
                         },
                         options: {
                             responsive: true,
-                            plugins: { legend: { display: false } },
+                            interaction: {
+                                intersect: false,
+                                mode: 'index',
+                            },
+                            plugins: { 
+                                legend: { display: false },
+                                tooltip: {
+                                    backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                    titleColor: '#94a3b8',
+                                    bodyColor: '#4facfe',
+                                    borderColor: 'rgba(79, 172, 254, 0.2)',
+                                    borderWidth: 1,
+                                    padding: 10
+                                }
+                            },
                             scales: { 
                                 x: { display: false },
-                                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { size: 9 } } }
+                                y: { 
+                                    grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, 
+                                    ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 5 } 
+                                }
                             }
                         }
                     });
+
+                    // 2. New Trade PnL Distribution (Bar Chart)
+                    if (data.trade_pnls) {
+                        const ctxDist = document.getElementById('distributionChart').getContext('2d');
+                        
+                        // Dynamic coloring based on profit or loss
+                        const barColors = data.trade_pnls.map(pnl => pnl > 0 ? 'rgba(52, 211, 153, 0.8)' : 'rgba(248, 113, 113, 0.8)');
+                        
+                        new Chart(ctxDist, {
+                            type: 'bar',
+                            data: {
+                                labels: data.trade_pnls.map((_, i) => `Trade ${i+1}`),
+                                datasets: [{
+                                    data: data.trade_pnls,
+                                    backgroundColor: barColors,
+                                    borderRadius: 2
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                plugins: { legend: { display: false } },
+                                scales: {
+                                    x: { display: false },
+                                    y: { 
+                                        grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false },
+                                        ticks: { color: '#94a3b8', font: { size: 9 } }
+                                    }
+                                }
+                            }
+                        });
+                    }
                 })
                 .catch(err => {
                     document.getElementById('statusText').innerText = "Failed to load metrics.";
