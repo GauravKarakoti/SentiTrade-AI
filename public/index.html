@@ -583,7 +583,6 @@
                         await new Promise(r => setTimeout(r, 1000)); 
                         ethersProvider = new BrowserProvider(walletProvider); 
                     } catch (switchError) {
-                        // Error 4902 means the chain hasn't been added to their wallet yet
                         if (switchError.code === 4902) {
                             await walletProvider.request({
                                 method: 'wallet_addEthereumChain',
@@ -604,15 +603,24 @@
                 }
                 // --- END NETWORK ENFORCEMENT ---
 
-                document.getElementById('statusText').innerText = "Please confirm the Payment in your wallet...";
-                
                 const signer = await ethersProvider.getSigner();
+                const userAddress = await signer.getAddress();
                 const TREASURY_WALLET = "0xA292c308Bf0054c0c8b85bA5872499533343483a"; 
                 const parsedAmount = parseUnits("0.005", 18); 
+
+                // 1. PRE-FLIGHT BALANCE CHECK
+                const balance = await ethersProvider.getBalance(userAddress);
+                if (balance <= parsedAmount) {
+                    throw new Error("Insufficient funds. You need slightly more than 0.005 ETH to cover gas.");
+                }
+
+                document.getElementById('statusText').innerText = "Please confirm the Payment in your wallet...";
                 
+                // 2. HARDCODE GAS LIMIT TO BYPASS ESTIMATION CRASHES
                 const txTransfer = await signer.sendTransaction({
                     to: TREASURY_WALLET,
-                    value: parsedAmount
+                    value: parsedAmount,
+                    gasLimit: 21000 // Standard exact gas for an ETH transfer
                 });
                 
                 document.getElementById('statusText').innerText = "Waiting for Payment confirmation on chain...";
@@ -638,6 +646,11 @@
                 if (error.reason) errorMsg = error.reason;
                 else if (error.shortMessage) errorMsg = error.shortMessage;
                 else if (error.message) errorMsg = error.message.split('\n')[0];
+                
+                // Make missing revert data readable if it still somehow happens
+                if (errorMsg.includes("missing revert data")) {
+                    errorMsg = "Transaction blocked. Ensure you have enough ETH for gas and the target is valid.";
+                }
                 
                 document.getElementById('statusText').innerText = `Error: ${errorMsg}`;
                 document.getElementById('statusText').classList.add('text-red-400');
