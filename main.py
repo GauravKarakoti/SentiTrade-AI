@@ -395,10 +395,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "amount": "15"
             })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
-            keyboard = {"inline_keyboard": [[{"text": "💎 Pay 15 USDC / Month", "web_app": {"url": web_app_url}}]]}
+            keyboard = {"inline_keyboard": [[{"text": "💎 Pay 0.005 ETH / Month", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
                 chat_id, 
-                "⭐️ **Unlock SentiTrade Premium**\n\nPay 15 USDC on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
+                "⭐️ **Unlock SentiTrade Premium**\n\nPay 0.005 ETH on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
                 reply_markup=keyboard
             )
             
@@ -680,10 +680,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "amount": "15"
             })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
-            keyboard = {"inline_keyboard": [[{"text": "💎 Pay 15 USDC / Month", "web_app": {"url": web_app_url}}]]}
+            keyboard = {"inline_keyboard": [[{"text": "💎 Pay 0.005 ETH / Month", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
                 chat_id, 
-                "⭐️ **Unlock SentiTrade Premium**\n\nPay 15 USDC on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
+                "⭐️ **Unlock SentiTrade Premium**\n\nPay 0.005 ETH on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
                 reply_markup=keyboard
             )
         

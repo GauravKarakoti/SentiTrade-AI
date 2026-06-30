@@ -413,8 +413,8 @@
             document.getElementById('aiLogicCard').style.display = 'none';
         } else if (txParams.intent === 'subscribe') {
             elActionLabel.innerText = "Premium Subscription";
-            elAmountDisplay.innerText = "15.00";
-            elTokenDisplay.innerText = "USDC / Month";
+            elAmountDisplay.innerText = "0.005";
+            elTokenDisplay.innerText = "ETH / Month";
             btnAction.innerText = "Connect Wallet";
 
             document.getElementById('depositUI').style.display = 'none';
@@ -523,8 +523,7 @@
                     btnAction.classList.add('bg-purple-500', 'hover:bg-purple-600', 'text-white');
                     document.getElementById('statusBadge').innerText = "Wallet Linked";
                 } else if (txParams.intent === 'subscribe') {
-                    // NEW: Subscribe Button State
-                    btnAction.innerHTML = `Pay 15 USDC <span class="ml-1">💎</span>`;
+                    btnAction.innerHTML = `Pay 0.005 ETH <span class="ml-1">💎</span>`;
                     btnAction.classList.remove('btn-primary');
                     btnAction.classList.add('bg-blue-500', 'hover:bg-blue-600', 'text-white');
                     document.getElementById('statusBadge').innerText = "Wallet Linked";
@@ -552,9 +551,8 @@
                     } else if (txParams.intent === 'deposit') {
                         await executeVaultDeposit();
                     } else if (txParams.intent === 'redeem') {
-                        await executeVaultRedeem(); // ADD THIS
+                        await executeVaultRedeem();
                     } else if (txParams.intent === 'subscribe') {
-                        // NEW: Route to subscription execution
                         await executeSubscription(); 
                     }
                 } catch (err) {
@@ -578,19 +576,17 @@
                 const ethersProvider = new BrowserProvider(walletProvider);
                 const signer = await ethersProvider.getSigner();
                 
-                const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; 
-                
                 const TREASURY_WALLET = "0xA292c308Bf0054c0c8b85bA5872499533343483a"; 
                 
-                // Parse 15 USDC with 6 decimal places
-                const parsedAmount = parseUnits("15", 6); 
+                // Parse 0.005 ETH with 18 decimal places
+                const parsedAmount = parseUnits("0.005", 18); 
                 
-                // Only need the standard ERC-20 transfer ABI
-                const usdcAbi = ["function transfer(address to, uint256 amount) public returns (bool)"];
-                const usdcContract = new Contract(USDC_ADDRESS, usdcAbi, signer);
+                // Execute a direct native ETH transfer
+                const txTransfer = await signer.sendTransaction({
+                    to: TREASURY_WALLET,
+                    value: parsedAmount
+                });
                 
-                // Execute the direct transfer
-                const txTransfer = await usdcContract.transfer(TREASURY_WALLET, parsedAmount);
                 document.getElementById('statusText').innerText = "Waiting for Payment confirmation on chain...";
                 await txTransfer.wait();
                 
