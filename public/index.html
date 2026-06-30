@@ -218,7 +218,8 @@
         const chains = [
             { chainId: 286623, name: 'SoDEX Mainnet', currency: 'SOSO', explorerUrl: 'https://main-scan.valuechain.xyz', rpcUrl: 'https://mainnet.valuechain.xyz' },
             { chainId: 138565, name: 'SoDEX Testnet', currency: 'SOSO', explorerUrl: 'https://test-scan.valuechain.xyz', rpcUrl: 'https://testnet.valuechain.xyz' },
-            { chainId: 84532, name: 'Base Sepolia', currency: 'ETH', explorerUrl: 'https://sepolia.basescan.org', rpcUrl: 'https://sepolia.base.org' }
+            { chainId: 84532, name: 'Base Sepolia', currency: 'ETH', explorerUrl: 'https://sepolia.basescan.org', rpcUrl: 'https://sepolia.base.org' },
+            { chainId: 8453, name: 'Base', currency: 'ETH', explorerUrl: 'https://basescan.org', rpcUrl: 'https://base.org' }
         ];
 
         const modal = createWeb3Modal({ ethersConfig: defaultConfig({ metadata }), chains, projectId });
@@ -256,12 +257,17 @@
         if (txParams.target === 'vault') {
             elTargetProtocol.innerHTML = `<span class="w-2 h-2 rounded-full bg-purple-500"></span> SentiTrade Vault`;
             document.getElementById('securityNotice').innerText = "🔒 Capital deposited into the ERC-4626 vault is autonomously managed by SentiTrade AI on the Base network.";
+        } else if (txParams.target === 'dev') {
+            elTargetProtocol.innerHTML = `<span class="w-2 h-2 rounded-full bg-purple-500"></span> SentiTrade Dev`;
         } else {
             elTargetProtocol.innerHTML = `<span class="w-2 h-2 rounded-full bg-blue-500"></span> SoDEX Spot`;
         }
 
-        if (txParams.chain === 'base') {
+        if (txParams.chain === 'baseSepolia') {
             elNetwork.innerText = "Base Sepolia";
+            document.getElementById('networkFeeRow').style.display = 'none';
+        } else if (txParams.chain === 'base') {
+            elNetwork.innerText = "Base";
             document.getElementById('networkFeeRow').style.display = 'none';
         } else {
             elNetwork.innerText = "ValueChain";

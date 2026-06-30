@@ -388,7 +388,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         elif data == "cmd_subscribe":
             await answer_callback_query(callback_id)
             query_params = urllib.parse.urlencode({
-                "intent": "subscribe", 
+                "intent": "subscribe",
+                "target": "dev",
                 "chain": "base", 
                 "chainId": "8453", # Mainnet
                 "amount": "15"
@@ -586,8 +587,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         f"Use `/deposit` to add funds or `/redeem` to withdraw."
                     )
                     
-                    query_dep = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
-                    query_red = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
+                    query_dep = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
+                    query_red = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
                     
                     keyboard = {"inline_keyboard": [[{"text": "💰 Deposit", "web_app": {"url": f"{MINI_APP_URL}?{query_dep}"}}, {"text": "📤 Redeem", "web_app": {"url": f"{MINI_APP_URL}?{query_red}"}}]]}
                     await send_direct_message(chat_id, msg, reply_markup=keyboard)
@@ -597,7 +598,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 await send_direct_message(chat_id, f"🔌 **Service Disconnected:** Could not reach the Vault Execution Node.\n`{str(e)}`")
 
         elif text == "/deposit":
-            query_params = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
+            query_params = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "💰 Open Deposit Portal", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
@@ -609,7 +610,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             )
             
         elif text == "/redeem":
-            query_params = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "base", "chainId": "84532"})
+            query_params = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "📤 Open Redemption Portal", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
@@ -672,7 +673,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         
         elif text == "/subscribe":
             query_params = urllib.parse.urlencode({
-                "intent": "subscribe", 
+                "intent": "subscribe",
+                "target": "dev",
                 "chain": "base", 
                 "chainId": "8453", # Mainnet
                 "amount": "15"
