@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "start": "node dist/vault-manager.js",
-    "start:render": "pwd && node dist/vault-manager.js",
+    "start:render": "pwd && find . -name '*.js' | grep vault && exit 1",
     "dev": "tsx --watch vault-manager.ts",
     "build": "tsc -b",
     "deploy": "hardhat run scripts/deploy.ts --network baseSepolia"
