@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, BigInteger, Boolean, Integer, DateTime, Float
+from sqlalchemy import Column, String, BigInteger, Boolean, Integer, DateTime, Float, Text
 from datetime import datetime
 
 load_dotenv()
@@ -50,6 +50,13 @@ class AgentEquitySnapshot(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     simulated_equity = Column(Float, default=1000.0)
+
+class SystemLog(Base):
+    __tablename__ = "system_logs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    level = Column(String(20), default="INFO")
+    message = Column(Text, nullable=False)
 
 async def init_db():
     async with engine.begin() as conn:

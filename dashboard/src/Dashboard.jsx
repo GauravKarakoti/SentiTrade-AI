@@ -1,3 +1,5 @@
+import { useState, useEffect, useRef } from 'react';
+
 export default function Dashboard() {
   const icons = {
     newspaper: (
@@ -17,11 +19,78 @@ export default function Dashboard() {
     )
   };
 
+  // State for real API data
+  const [kpis, setKpis] = useState({
+    winRate: "--%",
+    roi: "--%",
+    maxDrawdown: "--%",
+    totalTrades: "--"
+  });
+  
+  const [signals, setSignals] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [isLive, setIsLive] = useState(false);
+  
+  const logsContainerRef = useRef(null);
+
+  useEffect(() => {
+    const API_BASE_URL = import.meta.env.VITE_API_URL;
+
+    const fetchDashboardData = async () => {
+      try {
+        // Fetch KPIs from existing backend endpoint
+        const metricsRes = await fetch(`${API_BASE_URL}/api/metrics`);
+        if (metricsRes.ok) {
+          const metricsData = await metricsRes.json();
+          if (metricsData.kpis) {
+            setKpis({
+              winRate: typeof metricsData.kpis.win_rate === 'number' ? `${(metricsData.kpis.win_rate).toFixed(1)}%` : metricsData.kpis.win_rate,
+              roi: typeof metricsData.kpis.roi === 'number' ? `${(metricsData.kpis.roi).toFixed(2)}%` : metricsData.kpis.roi,
+              maxDrawdown: typeof metricsData.kpis.max_drawdown === 'number' ? `${(metricsData.kpis.max_drawdown).toFixed(2)}%` : metricsData.kpis.max_drawdown,
+              totalTrades: metricsData.kpis.total_trades
+            });
+            setIsLive(true);
+          }
+        }
+
+        // Fetch Signals (requires adding the endpoint in main.py)
+        const signalsRes = await fetch(`${API_BASE_URL}/api/signals`);
+        if (signalsRes.ok) {
+          const signalsData = await signalsRes.json();
+          setSignals(signalsData);
+        }
+
+        const logsRes = await fetch(`${API_BASE_URL}/api/logs`);
+        if (logsRes.ok) {
+          const logsData = await logsRes.json();
+          setLogs(logsData);
+        }
+      } catch (error) {
+        console.error("Error fetching live data:", error);
+        setIsLive(false);
+      }
+    };
+
+    fetchDashboardData();
+    const interval = setInterval(fetchDashboardData, 10000); // Refresh every 10s
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (logsContainerRef.current) {
+      // This specifically scrolls ONLY the logs container, not the window
+      logsContainerRef.current.scrollTo({
+        top: logsContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
+  }, [logs]);
+
   const metrics = [
-    { label: "News Processed (24h)", value: "142 articles", icon: icons.newspaper, textClass: "text-emerald-400", gradientClass: "from-emerald-500/50" },
-    { label: "Sentiment Accuracy", value: "87.4%", icon: icons.brain, textClass: "text-cyan-400", gradientClass: "from-cyan-500/50" },
-    { label: "Signals Dispatched", value: "34", icon: icons.activity, textClass: "text-blue-400", gradientClass: "from-blue-500/50" },
-    { label: "Vault TVL", value: "$15,240", icon: icons.send, textClass: "text-indigo-400", gradientClass: "from-indigo-500/50" }
+    { label: "Win Rate", value: kpis.winRate, icon: icons.brain, textClass: "text-emerald-400", gradientClass: "from-emerald-500/50" },
+    { label: "Strategy ROI", value: kpis.roi, icon: icons.activity, textClass: "text-cyan-400", gradientClass: "from-cyan-500/50" },
+    { label: "Total Trades", value: kpis.totalTrades.toString(), icon: icons.send, textClass: "text-blue-400", gradientClass: "from-blue-500/50" },
+    { label: "Max Drawdown", value: kpis.maxDrawdown, icon: icons.newspaper, textClass: "text-red-400", gradientClass: "from-red-500/50" }
   ];
 
   const pipeline = [
@@ -29,29 +98,6 @@ export default function Dashboard() {
     { title: "AI Analysis", subtitle: "Groq LLM Sentiment Parsing", icon: icons.brain, bgClass: "bg-cyan-500/20", borderClass: "border-cyan-500/30" },
     { title: "Signal Generation", subtitle: "Bullish/Bearish Scoring", icon: icons.activity, bgClass: "bg-blue-500/20", borderClass: "border-blue-500/30" },
     { title: "Execution", subtitle: "Telegram Dispatch & Vault Tx", icon: icons.send, bgClass: "bg-indigo-500/20", borderClass: "border-indigo-500/30" }
-  ];
-
-  const logs = [
-    "[14:02:01] Received: Macro market update from SoSoValue...",
-    "[14:02:03] Groq LLM: Processed in 0.4s -> Sentiment: Bullish (Score: 85)",
-    "[14:02:04] Action: Buy signal dispatched to Telegram.",
-    "[14:05:22] Received: BTC volatility alert stream...",
-    "[14:05:24] Groq LLM: Processed in 0.3s -> Sentiment: Neutral (Score: 52)",
-    "[14:05:25] Action: Hold signal logged to internal queue.",
-    "[14:12:10] Received: Ethereum ETF inflow news...",
-    "[14:12:12] Groq LLM: Processed in 0.5s -> Sentiment: Bearish (Score: 32)",
-    "[14:12:13] Action: Sell signal dispatched to Telegram.",
-    "[14:15:00] Received: Base Sepolia network sync complete.",
-    "[14:15:01] System: Vault health check passed. TVL stable."
-  ];
-
-  const signals = [
-    { time: "14:02:04", asset: "BTC", score: 85, sentiment: "Bullish", action: "Buy", status: "Confirmed on Ethereum" },
-    { time: "14:05:25", asset: "ETH", score: 52, sentiment: "Neutral", action: "Hold", status: "Logged" },
-    { time: "14:12:13", asset: "ETH", score: 32, sentiment: "Bearish", action: "Sell", status: "Confirmed on Base Sepolia" },
-    { time: "14:18:45", asset: "BTC", score: 91, sentiment: "Bullish", action: "Buy", status: "Confirmed on Ethereum" },
-    { time: "14:20:11", asset: "SOL", score: 48, sentiment: "Neutral", action: "Hold", status: "Logged" },
-    { time: "14:25:33", asset: "BTC", score: 28, sentiment: "Bearish", action: "Sell", status: "Confirmed on Ethereum" }
   ];
 
   return (
@@ -94,10 +140,12 @@ export default function Dashboard() {
         
         <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900/50 border border-slate-800/50 backdrop-blur-md shadow-[0_0_15px_rgba(16,185,129,0.1)]">
           <span className="relative flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${isLive ? 'bg-emerald-400 animate-ping' : 'bg-red-400'}`}></span>
+            <span className={`relative inline-flex rounded-full h-3 w-3 ${isLive ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
           </span>
-          <span className="text-sm font-medium text-zinc-300">System Status: Live</span>
+          <span className="text-sm font-medium text-zinc-300">
+            System Status: {isLive ? 'Live' : 'Connecting...'}
+          </span>
         </div>
         
         <div className="flex items-center gap-3">
@@ -167,16 +215,19 @@ export default function Dashboard() {
             <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
             Live Activity Feed
           </h2>
-          <div className="h-64 overflow-hidden relative rounded-xl bg-slate-950/50 border border-slate-800/30 p-3">
-            <div className="animate-scroll">
-              {[...logs, ...logs].map((log, i) => (
-                <div key={i} className="text-xs font-mono text-zinc-400 py-1.5 border-b border-slate-800/30 last:border-0">
-                  <span className="text-emerald-500/80">➜</span> {log}
+          <div className="h-64 overflow-y-auto relative rounded-xl bg-slate-950/50 border border-slate-800/30 p-3 flex flex-col scrollbar-thin scrollbar-thumb-slate-800">
+              {logs.length > 0 ? logs.map((log, i) => (
+                <div key={i} className="text-xs font-mono text-zinc-400 py-1.5 border-b border-slate-800/30 last:border-0 break-words">
+                  <span className={log.includes("ERROR") ? "text-red-500/80" : "text-emerald-500/80"}>➜</span> {log}
                 </div>
-              ))}
+              )) : (
+                <div className="text-xs font-mono text-zinc-500 py-1.5 text-center mt-20">
+                  Awaiting agent initialization...
+                </div>
+              )}
+              <div ref={logsContainerRef} />
             </div>
           </div>
-        </div>
 
         {/* Recent Signals Table */}
         <div className="p-5 rounded-2xl bg-slate-900/40 backdrop-blur-xl border border-slate-800/50">
@@ -195,7 +246,7 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/30">
-                {signals.map((s, i) => (
+                {signals.length > 0 ? signals.map((s, i) => (
                   <tr key={i} className="hover:bg-slate-800/30 transition-colors">
                     <td className="px-4 py-3 text-zinc-400 font-mono text-xs">{s.time}</td>
                     <td className="px-4 py-3 font-medium text-white">{s.asset}</td>
@@ -217,24 +268,28 @@ export default function Dashboard() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {s.action === "Buy" && (
+                      {s.action === "BUY" && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
                           {s.action}
                         </span>
                       )}
-                      {s.action === "Sell" && (
+                      {s.action === "SELL" && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-red-500/10 text-red-400 border-red-500/20">
                           {s.action}
                         </span>
                       )}
-                      {s.action === "Hold" && (
+                      {s.action === "HOLD" && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-amber-500/10 text-amber-400 border-amber-500/20">
                           {s.action}
                         </span>
                       )}
                     </td>
                   </tr>
-                ))}
+                )) : (
+                  <tr>
+                    <td colSpan="4" className="px-4 py-8 text-center text-zinc-500">No signals found in the database yet.</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

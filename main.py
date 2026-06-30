@@ -13,7 +13,7 @@ from sqlalchemy import select
 from eth_utils import keccak
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import init_db, get_db, AsyncSessionLocal, User, ValueChainAnalytics
+from db import init_db, get_db, AsyncSessionLocal, User, ValueChainAnalytics, SystemLog
 from bot_logic import (
     build_prompt, analyze_with_llm, generate_signals, 
     send_telegram_alert, generate_chat_reply, 
@@ -40,12 +40,14 @@ SSI_CONTRACTS = {
 background_tasks = set()
 
 async def background_analysis_loop():
+    await log_to_db("System initialized. Agentic background loop started.", "INFO")
     while True:
         try:
             async with AsyncSessionLocal() as db:
                 await perform_analysis(db)
         except Exception as e:
             print(f"Background Loop Error: {e}")
+            await log_to_db(f"Analysis Error: {str(e)}", "ERROR")
         await asyncio.sleep(600)
 
 @asynccontextmanager
@@ -65,6 +67,50 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+async def log_to_db(message: str, level: str = "INFO"):
+    try:
+        async with AsyncSessionLocal() as session:
+            session.add(SystemLog(message=message, level=level))
+            await session.commit()
+    except Exception as e:
+        print(f"Failed to write log to DB: {e}")
+
+@app.get("/api/logs")
+async def get_system_logs(db: AsyncSession = Depends(get_db)):
+    # Fetch the 20 most recent logs
+    result = await db.execute(
+        select(SystemLog).order_by(SystemLog.timestamp.desc()).limit(20)
+    )
+    records = result.scalars().all()
+    
+    # Reverse them so the UI shows the oldest at the top, scrolling down to the newest
+    return [
+        f"[{r.timestamp.strftime('%H:%M:%S')}] {r.message}"
+        for r in reversed(records)
+    ]
+
+@app.get("/api/signals")
+async def get_recent_signals(db: AsyncSession = Depends(get_db)):
+    # Fetch the 6 most recent signals from the database
+    result = await db.execute(
+        select(ValueChainAnalytics)
+        .order_by(ValueChainAnalytics.timestamp.desc())
+        .limit(6)
+    )
+    records = result.scalars().all()
+    
+    return [
+        {
+            "time": r.timestamp.strftime("%H:%M:%S") if r.timestamp else "N/A",
+            "asset": r.asset,
+            "score": r.confidence or 0,
+            "sentiment": "Bullish" if r.sentiment == "BUY" else "Bearish" if r.sentiment == "SELL" else "Neutral",
+            "action": r.sentiment or "HOLD",
+            "status": "Logged"
+        }
+        for r in records
+    ]
 
 @app.get("/api/metrics")
 async def get_performance_metrics(db: AsyncSession = Depends(get_db)):
@@ -161,12 +207,16 @@ async def perform_analysis(db: AsyncSession):
 
     news_items = await fetch_news_from_api()
     new_news = await deduplicate_and_categorize(news_items)
-    if not new_news: return {"status": "no_new_data"}
+    if not new_news: 
+        return {"status": "no_new_data"}
+
+    await log_to_db(f"Ingested {len(new_news)} new macro updates. Routing to LLM...", "INFO")
 
     analyses = analyze_with_llm(build_prompt(new_news))
     signals = generate_signals(analyses)
-
+    
     if signals:
+        await log_to_db(f"LLM Processing complete. {len(signals)} agentic signals generated.", "INFO")
         result = await db.execute(select(User).filter(User.is_active == True))
         active_users = result.scalars().all()
         
