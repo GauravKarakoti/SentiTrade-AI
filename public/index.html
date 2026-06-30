@@ -209,7 +209,6 @@
         };
 
         import { createWeb3Modal, defaultConfig } from 'https://esm.sh/@web3modal/ethers@5.1.11?bundle';
-        // IMPORT parseUnits and Contract for the on-chain transactions
         import { BrowserProvider, Contract, parseUnits } from 'https://esm.sh/ethers@6.13.1?bundle';
 
         const projectId = 'cfd6d68649717d2118148c25c6fb5aec'; 
@@ -219,7 +218,7 @@
             { chainId: 286623, name: 'SoDEX Mainnet', currency: 'SOSO', explorerUrl: 'https://main-scan.valuechain.xyz', rpcUrl: 'https://mainnet.valuechain.xyz' },
             { chainId: 138565, name: 'SoDEX Testnet', currency: 'SOSO', explorerUrl: 'https://test-scan.valuechain.xyz', rpcUrl: 'https://testnet.valuechain.xyz' },
             { chainId: 84532, name: 'Base Sepolia', currency: 'ETH', explorerUrl: 'https://sepolia.basescan.org', rpcUrl: 'https://sepolia.base.org' },
-            { chainId: 8453, name: 'Base', currency: 'ETH', explorerUrl: 'https://basescan.org', rpcUrl: 'https://base.org' }
+            { chainId: 8453, name: 'Base', currency: 'ETH', explorerUrl: 'https://basescan.org', rpcUrl: 'https://mainnet.base.org' }
         ];
 
         const modal = createWeb3Modal({ ethersConfig: defaultConfig({ metadata }), chains, projectId });
@@ -258,7 +257,7 @@
             elTargetProtocol.innerHTML = `<span class="w-2 h-2 rounded-full bg-purple-500"></span> SentiTrade Vault`;
             document.getElementById('securityNotice').innerText = "🔒 Capital deposited into the ERC-4626 vault is autonomously managed by SentiTrade AI on the Base network.";
         } else if (txParams.target === 'dev') {
-            elTargetProtocol.innerHTML = `<span class="w-2 h-2 rounded-full bg-purple-500"></span> SentiTrade Dev`;
+            elTargetProtocol.innerHTML = `<span class="w-2 h-2 rounded-full bg-purple-500"></span> Treasury`;
         } else {
             elTargetProtocol.innerHTML = `<span class="w-2 h-2 rounded-full bg-blue-500"></span> SoDEX Spot`;
         }
@@ -267,7 +266,7 @@
             elNetwork.innerText = "Base Sepolia";
             document.getElementById('networkFeeRow').style.display = 'none';
         } else if (txParams.chain === 'base') {
-            elNetwork.innerText = "Base";
+            elNetwork.innerText = "Base Mainnet";
             document.getElementById('networkFeeRow').style.display = 'none';
         } else {
             elNetwork.innerText = "ValueChain";
@@ -291,14 +290,12 @@
                     document.getElementById('globalWinRate').innerText = data.kpis.win_rate.toFixed(2) + '%';
                     document.getElementById('globalDrawdown').innerText = data.kpis.max_drawdown.toFixed(2) + '%';
                     
-                    // Populate New Advanced KPIs (Assuming they are returned in the API)
+                    // Populate New Advanced KPIs
                     if(data.kpis.profit_factor) document.getElementById('globalProfitFactor').innerText = data.kpis.profit_factor.toFixed(2);
                     if(data.kpis.sharpe_ratio) document.getElementById('globalSharpe').innerText = data.kpis.sharpe_ratio.toFixed(2);
                     
-                    // 1. Enhanced Equity Curve (Line Chart)
+                    // Enhanced Equity Curve
                     const ctxEquity = document.getElementById('equityChart').getContext('2d');
-                    
-                    // Create a beautiful gradient for the fill
                     let gradientFill = ctxEquity.createLinearGradient(0, 0, 0, 150);
                     gradientFill.addColorStop(0, 'rgba(79, 172, 254, 0.4)');
                     gradientFill.addColorStop(1, 'rgba(79, 172, 254, 0.0)');
@@ -314,9 +311,9 @@
                                 backgroundColor: gradientFill,
                                 borderWidth: 2,
                                 fill: true,
-                                pointRadius: 0, // Hide points for a cleaner institutional look
+                                pointRadius: 0, 
                                 pointHoverRadius: 4,
-                                tension: 0.3 // Smooth curves
+                                tension: 0.3
                             }]
                         },
                         options: {
@@ -346,11 +343,9 @@
                         }
                     });
 
-                    // 2. New Trade PnL Distribution (Bar Chart)
+                    // Trade PnL Distribution
                     if (data.trade_pnls) {
                         const ctxDist = document.getElementById('distributionChart').getContext('2d');
-                        
-                        // Dynamic coloring based on profit or loss
                         const barColors = data.trade_pnls.map(pnl => pnl > 0 ? 'rgba(52, 211, 153, 0.8)' : 'rgba(248, 113, 113, 0.8)');
                         
                         new Chart(ctxDist, {
@@ -569,19 +564,52 @@
             
             btnAction.disabled = true;
             btnAction.innerHTML = `<div class="loader"></div>`;
-            document.getElementById('statusText').innerText = "Please confirm the Payment in your wallet...";
+            document.getElementById('statusText').innerText = "Verifying network connection...";
             document.getElementById('statusText').classList.remove('text-red-400', 'text-emerald-400');
             
             try {
-                const ethersProvider = new BrowserProvider(walletProvider);
+                let ethersProvider = new BrowserProvider(walletProvider);
+                let network = await ethersProvider.getNetwork();
+
+                // --- ENFORCE BASE MAINNET (Chain ID: 8453) ---
+                if (Number(network.chainId) !== 8453) {
+                    document.getElementById('statusText').innerText = "Please switch to Base Mainnet in your wallet...";
+                    try {
+                        await walletProvider.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: '0x2105' }], // 8453 in Hex
+                        });
+                        
+                        await new Promise(r => setTimeout(r, 1000)); 
+                        ethersProvider = new BrowserProvider(walletProvider); 
+                    } catch (switchError) {
+                        // Error 4902 means the chain hasn't been added to their wallet yet
+                        if (switchError.code === 4902) {
+                            await walletProvider.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: '0x2105',
+                                    chainName: 'Base',
+                                    nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                                    rpcUrls: ['https://mainnet.base.org'],
+                                    blockExplorerUrls: ['https://basescan.org']
+                                }]
+                            });
+                            await new Promise(r => setTimeout(r, 1000));
+                            ethersProvider = new BrowserProvider(walletProvider);
+                        } else {
+                            throw new Error("You must switch to Base Mainnet to subscribe.");
+                        }
+                    }
+                }
+                // --- END NETWORK ENFORCEMENT ---
+
+                document.getElementById('statusText').innerText = "Please confirm the Payment in your wallet...";
+                
                 const signer = await ethersProvider.getSigner();
-                
                 const TREASURY_WALLET = "0xA292c308Bf0054c0c8b85bA5872499533343483a"; 
-                
-                // Parse 0.005 ETH with 18 decimal places
                 const parsedAmount = parseUnits("0.005", 18); 
                 
-                // Execute a direct native ETH transfer
                 const txTransfer = await signer.sendTransaction({
                     to: TREASURY_WALLET,
                     value: parsedAmount
@@ -594,7 +622,6 @@
                 document.getElementById('statusText').classList.add('text-emerald-400');
                 btnAction.innerText = "Done";
                 
-                // Send success ping to the Python Webhook
                 tg.sendData(JSON.stringify({ 
                     status: 'subscribed',
                     tx_hash: txTransfer.hash
@@ -630,10 +657,45 @@
 
             btnAction.disabled = true;
             btnAction.innerHTML = `<div class="loader"></div>`;
-            document.getElementById('statusText').innerText = "Please confirm the Redemption in your wallet...";
+            document.getElementById('statusText').innerText = "Verifying network connection...";
             
             try {
-                const ethersProvider = new BrowserProvider(walletProvider);
+                let ethersProvider = new BrowserProvider(walletProvider);
+                let network = await ethersProvider.getNetwork();
+
+                // --- ENFORCE BASE SEPOLIA (Chain ID: 84532) ---
+                if (Number(network.chainId) !== 84532) {
+                    document.getElementById('statusText').innerText = "Please switch to Base Sepolia in your wallet...";
+                    try {
+                        await walletProvider.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: '0x14a34' }], // 84532 in Hex
+                        });
+                        await new Promise(r => setTimeout(r, 1000));
+                        ethersProvider = new BrowserProvider(walletProvider);
+                    } catch (switchError) {
+                        if (switchError.code === 4902) {
+                            await walletProvider.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: '0x14a34',
+                                    chainName: 'Base Sepolia',
+                                    nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                                    rpcUrls: ['https://sepolia.base.org'],
+                                    blockExplorerUrls: ['https://sepolia.basescan.org']
+                                }]
+                            });
+                            await new Promise(r => setTimeout(r, 1000));
+                            ethersProvider = new BrowserProvider(walletProvider);
+                        } else {
+                            throw new Error("You must switch to Base Sepolia to interact with the Vault.");
+                        }
+                    }
+                }
+                // --- END NETWORK ENFORCEMENT ---
+
+                document.getElementById('statusText').innerText = "Please confirm the Redemption in your wallet...";
+
                 const signer = await ethersProvider.getSigner();
                 const userAddress = await signer.getAddress();
                 const VAULT_ADDRESS = txParams.vaultAddress;
@@ -660,12 +722,17 @@
             } catch (error) {
                 btnAction.disabled = false;
                 btnAction.innerHTML = `Retry Redeem <span class="ml-1">🔄</span>`;
-                document.getElementById('statusText').innerText = "Transaction failed or rejected.";
+                
+                let errorMsg = "Transaction failed or rejected by user.";
+                if (error.reason) errorMsg = error.reason;
+                else if (error.shortMessage) errorMsg = error.shortMessage;
+                else if (error.message) errorMsg = error.message.split('\n')[0];
+                
+                document.getElementById('statusText').innerText = `Error: ${errorMsg}`;
                 document.getElementById('statusText').classList.add('text-red-400');
             }
         }
 
-        // Handles the ERC-4626 Vault Deposit Process natively in the Mini App
         async function executeVaultDeposit() {
             if (!walletProvider) return;
             
@@ -680,34 +747,64 @@
 
             btnAction.disabled = true;
             btnAction.innerHTML = `<div class="loader"></div>`;
-            document.getElementById('statusText').innerText = "Please confirm the Approval in your wallet...";
+            document.getElementById('statusText').innerText = "Verifying network connection...";
             document.getElementById('statusText').classList.remove('text-red-400', 'text-emerald-400');
             
             try {
-                const ethersProvider = new BrowserProvider(walletProvider);
+                let ethersProvider = new BrowserProvider(walletProvider);
+                let network = await ethersProvider.getNetwork();
+
+                // --- ENFORCE BASE SEPOLIA (Chain ID: 84532) ---
+                if (Number(network.chainId) !== 84532) {
+                    document.getElementById('statusText').innerText = "Please switch to Base Sepolia in your wallet...";
+                    try {
+                        await walletProvider.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: '0x14a34' }], // 84532 in Hex
+                        });
+                        await new Promise(r => setTimeout(r, 1000));
+                        ethersProvider = new BrowserProvider(walletProvider);
+                    } catch (switchError) {
+                        if (switchError.code === 4902) {
+                            await walletProvider.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: '0x14a34',
+                                    chainName: 'Base Sepolia',
+                                    nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                                    rpcUrls: ['https://sepolia.base.org'],
+                                    blockExplorerUrls: ['https://sepolia.basescan.org']
+                                }]
+                            });
+                            await new Promise(r => setTimeout(r, 1000));
+                            ethersProvider = new BrowserProvider(walletProvider);
+                        } else {
+                            throw new Error("You must switch to Base Sepolia to interact with the Vault.");
+                        }
+                    }
+                }
+                // --- END NETWORK ENFORCEMENT ---
+
+                document.getElementById('statusText').innerText = "Please confirm the Approval in your wallet...";
+
                 const signer = await ethersProvider.getSigner();
                 const userAddress = await signer.getAddress();
                 
                 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
-                
                 const VAULT_ADDRESS = txParams.vaultAddress;
 
-                // Format the user input to 6 decimals matching the USDC standard
                 const parsedAmount = parseUnits(depositAmount.toString(), 6); 
 
-                // Minimal ABIs needed for the interactions
                 const usdcAbi = ["function approve(address spender, uint256 amount) public returns (bool)"];
                 const vaultAbi = ["function deposit(uint256 assets, address receiver) public returns (uint256)"];
 
                 const usdcContract = new Contract(USDC_ADDRESS, usdcAbi, signer);
                 const vaultContract = new Contract(VAULT_ADDRESS, vaultAbi, signer);
 
-                // Step 1: Request USDC Approval
                 const txApprove = await usdcContract.approve(VAULT_ADDRESS, parsedAmount);
                 document.getElementById('statusText').innerText = "Waiting for Approval confirmation on chain...";
                 await txApprove.wait();
 
-                // Step 2: Request Vault Deposit
                 document.getElementById('statusText').innerText = "Approval successful! Please confirm the Deposit transaction...";
                 const txDeposit = await vaultContract.deposit(parsedAmount, userAddress);
                 document.getElementById('statusText').innerText = "Waiting for Deposit confirmation on chain...";
@@ -717,7 +814,6 @@
                 document.getElementById('statusText').classList.add('text-emerald-400');
                 btnAction.innerText = "Done";
                 
-                // Close the mini-app and return to Telegram
                 tg.sendData(JSON.stringify({ 
                     status: 'deposited',
                     address: userAddress,
@@ -731,7 +827,6 @@
                 btnAction.disabled = false;
                 btnAction.innerHTML = `Retry Deposit <span class="ml-1">🔄</span>`;
                 
-                // Extract the specific blockchain revert reason
                 let errorMsg = "Transaction failed or rejected by user.";
                 if (error.reason) errorMsg = error.reason;
                 else if (error.shortMessage) errorMsg = error.shortMessage;

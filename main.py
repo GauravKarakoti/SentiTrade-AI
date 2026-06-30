@@ -392,7 +392,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "target": "dev",
                 "chain": "base", 
                 "chainId": "8453", # Mainnet
-                "amount": "15"
+                "amount": "0.005"
             })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "💎 Pay 0.005 ETH / Month", "web_app": {"url": web_app_url}}]]}
@@ -677,7 +677,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "target": "dev",
                 "chain": "base", 
                 "chainId": "8453", # Mainnet
-                "amount": "15"
+                "amount": "0.005"
             })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "💎 Pay 0.005 ETH / Month", "web_app": {"url": web_app_url}}]]}
