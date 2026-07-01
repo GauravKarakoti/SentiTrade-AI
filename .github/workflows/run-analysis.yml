@@ -12,3 +12,5 @@ jobs:
     steps:
       - name: Ping the bot's run analysis endpoint
         run: curl -X POST -s --max-time 30 "https://sentitrade-ai.onrender.com/run-analysis" > /dev/null || true
+      - name: Ping the vault's health endpoint
+        run: curl -s --max-time 30 "https://sentitrade-ai-1.onrender.com/" > /dev/null || true
