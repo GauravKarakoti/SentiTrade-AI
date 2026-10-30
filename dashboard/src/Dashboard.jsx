@@ -26,11 +26,21 @@ export default function Dashboard() {
     maxDrawdown: "--%",
     totalTrades: "--"
   });
-  
+
+  // Wave 3 Builder Race commercial telemetry state
+  const [builderRace, setBuilderRace] = useState({
+    builder_code: "SENTITRADE",
+    builder_fee_bps: 10,
+    active_users: 0,
+    routed_trades: 0,
+    total_volume_usd: 0,
+    total_builder_fee_revenue_usd: 0
+  });
+
   const [signals, setSignals] = useState([]);
   const [logs, setLogs] = useState([]);
   const [isLive, setIsLive] = useState(false);
-  
+
   const logsContainerRef = useRef(null);
 
   useEffect(() => {
@@ -38,7 +48,6 @@ export default function Dashboard() {
 
     const fetchDashboardData = async () => {
       try {
-        // Fetch KPIs from existing backend endpoint
         const metricsRes = await fetch(`${API_BASE_URL}/api/metrics`);
         if (metricsRes.ok) {
           const metricsData = await metricsRes.json();
@@ -51,9 +60,11 @@ export default function Dashboard() {
             });
             setIsLive(true);
           }
+          if (metricsData.builder_race) {
+            setBuilderRace(metricsData.builder_race);
+          }
         }
 
-        // Fetch Signals (requires adding the endpoint in main.py)
         const signalsRes = await fetch(`${API_BASE_URL}/api/signals`);
         if (signalsRes.ok) {
           const signalsData = await signalsRes.json();
@@ -72,13 +83,12 @@ export default function Dashboard() {
     };
 
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 10000); // Refresh every 10s
+    const interval = setInterval(fetchDashboardData, 10000);
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
     if (logsContainerRef.current) {
-      // This specifically scrolls ONLY the logs container, not the window
       logsContainerRef.current.scrollTo({
         top: logsContainerRef.current.scrollHeight,
         behavior: "smooth"
@@ -97,7 +107,7 @@ export default function Dashboard() {
     { title: "Data Ingest", subtitle: "SoSoValue News Stream", icon: icons.newspaper, bgClass: "bg-emerald-500/20", borderClass: "border-emerald-500/30" },
     { title: "AI Analysis", subtitle: "Groq LLM Sentiment Parsing", icon: icons.brain, bgClass: "bg-cyan-500/20", borderClass: "border-cyan-500/30" },
     { title: "Signal Generation", subtitle: "Bullish/Bearish Scoring", icon: icons.activity, bgClass: "bg-blue-500/20", borderClass: "border-blue-500/30" },
-    { title: "Execution", subtitle: "Telegram Dispatch & Vault Tx", icon: icons.send, bgClass: "bg-indigo-500/20", borderClass: "border-indigo-500/30" }
+    { title: "SoDEX Execution", subtitle: `Builder Code: ${builderRace.builder_code}`, icon: icons.send, bgClass: "bg-indigo-500/20", borderClass: "border-indigo-500/30" }
   ];
 
   return (
@@ -118,56 +128,97 @@ export default function Dashboard() {
           animation: slide 2s ease-in-out infinite;
         }
       `}</style>
-      
+
       {/* Background grid */}
       <div className="fixed inset-0 z-0 pointer-events-none opacity-20" style={{
         backgroundImage: 'linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)',
         backgroundSize: '40px 40px'
       }} />
-      
+
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl" />
         <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl" />
       </div>
 
       {/* Header */}
-      <header className="relative flex flex-col md:flex-row items-center justify-between mb-8 gap-4 z-10">
-        <div className="text-2xl md:text-3xl font-bold tracking-tighter">
-          <span className="bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 via-cyan-400 to-blue-500">
-            SentiTrade AI
-          </span>
+      <header className="relative flex flex-col md:flex-row items-center justify-between mb-6 gap-4 z-10">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30">
+              SoSoValue Wave 3 • Builder Race
+            </span>
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+              SoDEX Builder Code: {builderRace.builder_code} ({builderRace.builder_fee_bps} bps)
+            </span>
+          </div>
+          <div className="text-2xl md:text-3xl font-bold tracking-tighter">
+            <span className="bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 via-cyan-400 to-blue-500">
+              SentiTrade AI
+            </span>
+          </div>
         </div>
-        
+
         <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900/50 border border-slate-800/50 backdrop-blur-md shadow-[0_0_15px_rgba(16,185,129,0.1)]">
           <span className="relative flex h-3 w-3">
             <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${isLive ? 'bg-emerald-400 animate-ping' : 'bg-red-400'}`}></span>
             <span className={`relative inline-flex rounded-full h-3 w-3 ${isLive ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
           </span>
           <span className="text-sm font-medium text-zinc-300">
-            System Status: {isLive ? 'Live' : 'Connecting...'}
+            ValueChain Status: {isLive ? 'Live' : 'Connecting...'}
           </span>
         </div>
-        
+
         <div className="flex items-center gap-3">
           <span className="px-3 py-1.5 rounded-full bg-slate-900/50 border border-slate-800/50 text-xs font-mono text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.1)]">
             LLM: Groq
           </span>
           <a
-            href="https://t.me/SentiTradeAIBot" // Replace with your actual bot username
+            href="https://t.me/SentiTradeAIBot"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-medium rounded-lg transition-colors shadow-sm text-sm"
           >
-            {/* Telegram Icon */}
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M11.944 0C5.344 0 0 5.344 0 12c0 5.622 3.88 10.312 9.042 11.65.596.11.814-.258.814-.574 0-.281-.01-1.028-.014-2.016-3.737.812-4.525-1.802-4.525-1.802-.61-1.552-1.492-1.966-1.492-1.966-1.218-.832.092-.816.092-.816 1.348.094 2.057 1.384 2.057 1.384 1.196 2.05 3.136 1.458 3.9 1.115.122-.867.47-1.458.852-1.794-2.984-.34-6.12-1.492-6.12-6.64 0-1.467.524-2.667 1.385-3.607-.14-.34-.6-1.706.13-3.556 0 0 1.128-.362 3.7 1.378 1.073-.298 2.222-.447 3.366-.452 1.142.005 2.293.154 3.367.452 2.57-1.74 3.696-1.378 3.696-1.378.732 1.85.272 3.216.132 3.556.863.94 1.383 2.14 1.383 3.607 0 5.16-3.14 6.297-6.134 6.63.482.415.914 1.235.914 2.49 0 1.798-.016 3.248-.016 3.69 0 .32.214.69.82.57C20.124 22.308 24 17.62 24 12c0-6.656-5.344-12-12.056-12z"/>
             </svg>
-            Open Telegram Bot
+            Trade on Telegram Bot
           </a>
         </div>
       </header>
 
-      {/* Top Metrics Row */}
+      {/* Wave 3 Builder Race Revenue & User Growth Strip */}
+      <div className="relative grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 z-10">
+        <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 backdrop-blur-xl">
+          <p className="text-xs uppercase tracking-wider text-emerald-300/80">SoDEX Builder Fee Revenue</p>
+          <p className="text-2xl font-bold text-emerald-400 mt-1">
+            ${Number(builderRace.total_builder_fee_revenue_usd || 0).toFixed(4)}
+          </p>
+          <p className="text-[11px] text-zinc-400 mt-1">Code: {builderRace.builder_code} ({builderRace.builder_fee_bps} bps)</p>
+        </div>
+        <div className="p-4 rounded-2xl bg-cyan-950/20 border border-cyan-500/30 backdrop-blur-xl">
+          <p className="text-xs uppercase tracking-wider text-cyan-300/80">Attributed SoDEX Volume</p>
+          <p className="text-2xl font-bold text-cyan-400 mt-1">
+            ${Number(builderRace.total_volume_usd || 0).toLocaleString()}
+          </p>
+          <p className="text-[11px] text-zinc-400 mt-1">ValueChain Orderbook + Vault</p>
+        </div>
+        <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-500/30 backdrop-blur-xl">
+          <p className="text-xs uppercase tracking-wider text-amber-300/80">Real Onboarded Users</p>
+          <p className="text-2xl font-bold text-amber-400 mt-1">
+            {builderRace.active_users}
+          </p>
+          <p className="text-[11px] text-zinc-400 mt-1">Active Telegram & Web3 Traders</p>
+        </div>
+        <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-500/30 backdrop-blur-xl">
+          <p className="text-xs uppercase tracking-wider text-indigo-300/80">Builder-Routed Orders</p>
+          <p className="text-2xl font-bold text-indigo-400 mt-1">
+            {builderRace.routed_trades}
+          </p>
+          <p className="text-[11px] text-zinc-400 mt-1">1-Click Gasless SoDEX Fills</p>
+        </div>
+      </div>
+
+      {/* Quant Strategy Metrics Row */}
       <div className="relative grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8 z-10">
         {metrics.map((m, i) => (
           <div key={i} className="group relative p-5 rounded-2xl bg-slate-900/40 backdrop-blur-xl border border-slate-800/50 hover:border-slate-700/50 transition-all duration-300 overflow-hidden">
@@ -186,9 +237,9 @@ export default function Dashboard() {
         <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/[0.05] via-transparent to-cyan-500/[0.05] pointer-events-none" />
         <h2 className="relative text-lg font-semibold mb-8 text-zinc-200 flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          Live Signal Pipeline
+          Live ValueChain Research-to-Execution Pipeline
         </h2>
-        
+
         <div className="relative flex flex-col md:flex-row items-center justify-between gap-2 md:gap-0">
           {pipeline.map((node, i) => (
             <div key={i} className="contents">
@@ -199,7 +250,7 @@ export default function Dashboard() {
                 <h3 className="font-semibold text-zinc-200 text-sm md:text-base">{node.title}</h3>
                 <p className="text-xs text-zinc-500 mt-1 max-w-[160px] leading-relaxed">{node.subtitle}</p>
               </div>
-              
+
               {i < pipeline.length - 1 && (
                 <div className="hidden md:flex flex-1 items-center justify-center px-2 max-w-[200px]">
                   <div className="h-px w-full bg-gradient-to-r from-emerald-500/40 via-cyan-500/40 to-blue-500/40 relative overflow-hidden">
@@ -208,7 +259,7 @@ export default function Dashboard() {
                   <div className="text-cyan-500/60 -ml-1">{icons.arrowRight}</div>
                 </div>
               )}
-              
+
               {i < pipeline.length - 1 && (
                 <div className="md:hidden flex flex-col items-center py-1">
                   <div className="w-px h-8 bg-gradient-to-b from-emerald-500/40 via-cyan-500/40 to-blue-500/40" />
@@ -225,27 +276,27 @@ export default function Dashboard() {
         <div className="p-5 rounded-2xl bg-slate-900/40 backdrop-blur-xl border border-slate-800/50">
           <h2 className="text-lg font-semibold mb-4 text-zinc-200 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
-            Live Activity Feed
+            Live Activity & Builder Fee Feed
           </h2>
           <div className="h-64 overflow-y-auto relative rounded-xl bg-slate-950/50 border border-slate-800/30 p-3 flex flex-col scrollbar-thin scrollbar-thumb-slate-800">
-              {logs.length > 0 ? logs.map((log, i) => (
-                <div key={i} className="text-xs font-mono text-zinc-400 py-1.5 border-b border-slate-800/30 last:border-0 break-words">
-                  <span className={log.includes("ERROR") ? "text-red-500/80" : "text-emerald-500/80"}>➜</span> {log}
-                </div>
-              )) : (
-                <div className="text-xs font-mono text-zinc-500 py-1.5 text-center mt-20">
-                  Awaiting agent initialization...
-                </div>
-              )}
-              <div ref={logsContainerRef} />
-            </div>
+            {logs.length > 0 ? logs.map((log, i) => (
+              <div key={i} className="text-xs font-mono text-zinc-400 py-1.5 border-b border-slate-800/30 last:border-0 break-words">
+                <span className={log.includes("ERROR") ? "text-red-500/80" : "text-emerald-500/80"}>➜</span> {log}
+              </div>
+            )) : (
+              <div className="text-xs font-mono text-zinc-500 py-1.5 text-center mt-20">
+                Awaiting agent initialization...
+              </div>
+            )}
+            <div ref={logsContainerRef} />
           </div>
+        </div>
 
         {/* Recent Signals Table */}
         <div className="p-5 rounded-2xl bg-slate-900/40 backdrop-blur-xl border border-slate-800/50">
           <h2 className="text-lg font-semibold mb-4 text-zinc-200 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-            Recent Signals
+            Recent Signals ({builderRace.builder_code})
           </h2>
           <div className="overflow-x-auto rounded-xl border border-slate-800/30">
             <table className="w-full text-sm text-left">
@@ -255,6 +306,7 @@ export default function Dashboard() {
                   <th className="px-4 py-3 font-medium">Asset</th>
                   <th className="px-4 py-3 font-medium">Sentiment</th>
                   <th className="px-4 py-3 font-medium">Action</th>
+                  <th className="px-4 py-3 font-medium">SoDEX Builder Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/30">
@@ -296,10 +348,13 @@ export default function Dashboard() {
                         </span>
                       )}
                     </td>
+                    <td className="px-4 py-3 font-mono text-xs text-emerald-400">
+                      {s.status} ({s.builder_code || builderRace.builder_code})
+                    </td>
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan="4" className="px-4 py-8 text-center text-zinc-500">No signals found in the database yet.</td>
+                    <td colSpan="5" className="px-4 py-8 text-center text-zinc-500">No signals found in the database yet.</td>
                   </tr>
                 )}
               </tbody>

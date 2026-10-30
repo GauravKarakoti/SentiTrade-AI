@@ -9,8 +9,12 @@ REDIS_URL = os.getenv("REDIS_URL")
 SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
 SOSOVALUE_BASE_URL = os.getenv("SOSOVALUE_BASE_URL")
 
+# Wave 3 Builder Race: SoDEX Builder Code & Fee Configuration
+SODEX_BUILDER_CODE = os.getenv("SODEX_BUILDER_CODE")
+SODEX_BUILDER_FEE_BPS = int(os.getenv("SODEX_BUILDER_FEE_BPS", "10"))  # 10 bps = 0.10%
+
 redis_client = Redis.from_url(
-    REDIS_URL, 
+    REDIS_URL,
     decode_responses=True,
     ssl_cert_reqs="none"
 )
@@ -18,6 +22,12 @@ redis_client = Redis.from_url(
 # Rate limiter params
 RATE_LIMIT_CAPACITY = 10
 RATE_LIMIT_REFILL_RATE = 2  # Tokens per second
+
+
+def calculate_builder_fee(amount_usd: float) -> float:
+    """Calculates attributed SoDEX Builder Fee in USD based on configured basis points."""
+    return round(float(amount_usd) * (SODEX_BUILDER_FEE_BPS / 10000.0), 6)
+
 
 async def acquire_token():
     """Atomic Redis token bucket rate limiting via Lua script."""
@@ -59,6 +69,7 @@ async def acquire_token():
             break
         await asyncio.sleep(0.5)
 
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -66,11 +77,15 @@ async def acquire_token():
 )
 async def make_api_request(url: str, params: dict = None):
     await acquire_token()
-    headers = {"x-soso-api-key": SOSOVALUE_API_KEY}
+    headers = {
+        "x-soso-api-key": SOSOVALUE_API_KEY,
+        "X-SoDEX-Builder-Code": SODEX_BUILDER_CODE,
+    }
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(url, headers=headers, params=params)
         resp.raise_for_status()
         return resp.json()
+
 
 async def fetch_news_from_api() -> list[dict]:
     if not SOSOVALUE_API_KEY:
@@ -78,6 +93,7 @@ async def fetch_news_from_api() -> list[dict]:
     url = f"{SOSOVALUE_BASE_URL}/v1/news"
     data = await make_api_request(url, {"limit": 20})
     return data.get("data", {}).get("list", []) if isinstance(data.get("data"), dict) else []
+
 
 async def deduplicate_and_categorize(news_items: list[dict]) -> list[dict]:
     """Filters news using MGET to save Upstash commands, maps native tags."""
@@ -87,13 +103,13 @@ async def deduplicate_and_categorize(news_items: list[dict]) -> list[dict]:
     # 1. Prepare keys for a single batch read
     valid_items = [item for item in news_items if item.get("id")]
     keys = [f"news:{item['id']}" for item in valid_items]
-    
-    if not keys: 
+
+    if not keys:
         return []
 
     # 2. Fetch all keys from Upstash in ONE single command
     existing_flags = await redis_client.mget(keys)
-    
+
     new_items = []
     keys_to_set = {}
 
@@ -101,22 +117,22 @@ async def deduplicate_and_categorize(news_items: list[dict]) -> list[dict]:
     for item, exists in zip(valid_items, existing_flags):
         if not exists:  # If Redis returned None, it's a new article
             nid = str(item.get("id"))
-            
+
             # Map native API tags straight to sector_tags
             item["sector_tags"] = item.get("tags", ["General"])
-            
+
             new_items.append(item)
             keys_to_set[f"news:{nid}"] = "1"
 
     # 4. Save only the brand new ones.
     if keys_to_set:
-        # We use a pipeline to efficiently execute the writes
         async with redis_client.pipeline() as pipe:
             for key, val in keys_to_set.items():
-                pipe.setex(key, 86400, val) # Set value with 24h TTL
+                pipe.setex(key, 86400, val)  # Set value with 24h TTL
             await pipe.execute()
-            
+
     return new_items
+
 
 async def fetch_currency_id(clean_asset: str) -> str:
     url = f"{SOSOVALUE_BASE_URL}/v1/currencies"
@@ -128,18 +144,20 @@ async def fetch_currency_id(clean_asset: str) -> str:
                 return currency.get("currency_id", "")
     return ""
 
+
 async def fetch_market_snapshot(asset: str) -> dict:
     clean_asset = asset.replace("$", "").upper()
     cache_key = f"market_snapshot_cache:{clean_asset}"
-    
+
     try:
         cid = await fetch_currency_id(clean_asset)
-        if not cid: return {}
-        
+        if not cid:
+            return {}
+
         url = f"{SOSOVALUE_BASE_URL}/v1/currencies/{cid}/market-snapshot"
         data = await make_api_request(url)
         payload = data.get("data", data) if isinstance(data, dict) else data
-        
+
         # Update cache (5 min TTL = 300 seconds)
         await redis_client.hset(cache_key, mapping={
             "price": str(payload.get("price", payload.get("current_price", 0.0))),
@@ -147,7 +165,7 @@ async def fetch_market_snapshot(asset: str) -> dict:
         })
         await redis_client.expire(cache_key, 300)
         return payload
-        
+
     except Exception as e:
         # Fallback Mechanism: Use cached values if API fails
         cached_data = await redis_client.hgetall(cache_key)

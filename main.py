@@ -9,19 +9,23 @@ from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from eth_utils import keccak
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import init_db, get_db, AsyncSessionLocal, User, ValueChainAnalytics, SystemLog
+from db import (
+    init_db, get_db, AsyncSessionLocal,
+    User, ValueChainAnalytics, BuilderFeeLedger, SystemLog
+)
 from bot_logic import (
-    build_prompt, analyze_with_llm, generate_signals, 
-    send_telegram_alert, generate_chat_reply, 
+    build_prompt, analyze_with_llm, generate_signals,
+    send_telegram_alert, generate_chat_reply,
     calculate_win_rate, calculate_roi, calculate_max_drawdown,
     calculate_profit_factor, calculate_sharpe_ratio
 )
 from sosovalue_client import (
-    fetch_news_from_api, deduplicate_and_categorize, fetch_market_snapshot
+    fetch_news_from_api, deduplicate_and_categorize, fetch_market_snapshot,
+    calculate_builder_fee, SODEX_BUILDER_CODE, SODEX_BUILDER_FEE_BPS
 )
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -29,6 +33,7 @@ MINI_APP_URL = os.getenv("MINI_APP_URL")
 SODEX_SPOT_API = os.getenv("SODEX_SPOT_API", "https://mainnet-gw.sodex.dev/api/v1/spot")
 VAULT_MANAGER_URL = os.getenv("VAULT_MANAGER_URL")
 VAULT_ADDRESS = os.getenv("VAULT_ADDRESS")
+BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME")
 
 SSI_CONTRACTS = {
     "MAG7.ssi": "0x9E6A46f294bB67c20F1D1E7AfB0bBEf614403B55",
@@ -39,8 +44,12 @@ SSI_CONTRACTS = {
 
 background_tasks = set()
 
+
 async def background_analysis_loop():
-    await log_to_db("System initialized. Agentic background loop started.", "INFO")
+    await log_to_db(
+        f"System initialized. Wave 3 Builder Code [{SODEX_BUILDER_CODE}] active.",
+        "INFO"
+    )
     while True:
         try:
             async with AsyncSessionLocal() as db:
@@ -50,6 +59,7 @@ async def background_analysis_loop():
             await log_to_db(f"Analysis Error: {str(e)}", "ERROR")
         await asyncio.sleep(600)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
@@ -58,7 +68,8 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
 
-app = FastAPI(lifespan=lifespan)
+
+app = FastAPI(lifespan=lifespan, title="SentiTrade-AI | SoSoValue Wave 3 Builder Race")
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,6 +79,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 async def log_to_db(message: str, level: str = "INFO"):
     try:
         async with AsyncSessionLocal() as session:
@@ -76,17 +88,80 @@ async def log_to_db(message: str, level: str = "INFO"):
     except Exception as e:
         print(f"Failed to write log to DB: {e}")
 
+
+async def record_builder_fee_event(
+    db: AsyncSession,
+    chat_id: int,
+    wallet_address: str,
+    asset: str,
+    action: str,
+    volume_usd: float,
+    execution_venue: str = "SoDEX",
+    reference_id: str = ""
+) -> float:
+    """Records attributed volume and Builder Fee revenue for the Wave 3 Builder Race."""
+    fee_usd = calculate_builder_fee(volume_usd)
+
+    ledger_entry = BuilderFeeLedger(
+        chat_id=chat_id,
+        wallet_address=wallet_address,
+        asset=asset,
+        action=action,
+        execution_venue=execution_venue,
+        builder_code=SODEX_BUILDER_CODE,
+        fee_bps=SODEX_BUILDER_FEE_BPS,
+        volume_usd=volume_usd,
+        builder_fee_usd=fee_usd,
+        reference_id=reference_id
+    )
+    db.add(ledger_entry)
+
+    # Update User stats
+    if chat_id:
+        res = await db.execute(select(User).filter(User.chat_id == chat_id))
+        user = res.scalar_one_or_none()
+        if user:
+            user.trades_count = (user.trades_count or 0) + 1
+            user.total_volume_usd = round((user.total_volume_usd or 0.0) + volume_usd, 4)
+            user.builder_fees_generated = round((user.builder_fees_generated or 0.0) + fee_usd, 6)
+            user.builder_code = SODEX_BUILDER_CODE
+
+    # Mark most recent matching signal as routed via SoDEX Builder Code
+    sig_res = await db.execute(
+        select(ValueChainAnalytics)
+        .filter(ValueChainAnalytics.asset == asset)
+        .order_by(ValueChainAnalytics.timestamp.desc())
+        .limit(1)
+    )
+    latest_sig = sig_res.scalar_one_or_none()
+    if latest_sig:
+        latest_sig.sodex_routed = True
+        latest_sig.builder_code = SODEX_BUILDER_CODE
+        latest_sig.trade_volume_usd = round((latest_sig.trade_volume_usd or 0.0) + volume_usd, 4)
+        latest_sig.builder_fee_usd = round((latest_sig.builder_fee_usd or 0.0) + fee_usd, 6)
+        if reference_id:
+            latest_sig.order_id = reference_id
+
+    await db.commit()
+    await log_to_db(
+        f"Builder Fee Earned: +${fee_usd:.4f} on ${volume_usd:.2f} {asset} ({execution_venue} | Code: {SODEX_BUILDER_CODE})",
+        "INFO"
+    )
+    return fee_usd
+
+
 @app.get("/api/logs")
 async def get_system_logs(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(SystemLog).order_by(SystemLog.timestamp.desc()).limit(20)
     )
     records = result.scalars().all()
-    
+
     return [
         f"[{r.timestamp.strftime('%H:%M:%S')}] {r.message}"
         for r in reversed(records)
     ]
+
 
 @app.get("/api/signals")
 async def get_recent_signals(db: AsyncSession = Depends(get_db)):
@@ -96,7 +171,7 @@ async def get_recent_signals(db: AsyncSession = Depends(get_db)):
         .limit(6)
     )
     records = result.scalars().all()
-    
+
     return [
         {
             "time": r.timestamp.strftime("%H:%M:%S") if r.timestamp else "N/A",
@@ -104,10 +179,69 @@ async def get_recent_signals(db: AsyncSession = Depends(get_db)):
             "score": r.confidence or 0,
             "sentiment": "Bullish" if r.sentiment == "BUY" else "Bearish" if r.sentiment == "SELL" else "Neutral",
             "action": r.sentiment or "HOLD",
-            "status": "Logged"
+            "status": "SoDEX Routed" if r.sodex_routed else "Logged",
+            "builder_code": r.builder_code or SODEX_BUILDER_CODE,
+            "builder_fee_usd": r.builder_fee_usd or 0.0
         }
         for r in records
     ]
+
+
+@app.get("/api/builder-race")
+async def get_builder_race_telemetry(db: AsyncSession = Depends(get_db)):
+    """Dedicated Wave 3 Builder Race endpoint for tracking real users, volume, and Builder Fee revenue."""
+    user_count_res = await db.execute(select(func.count(User.chat_id)))
+    total_users = user_count_res.scalar() or 0
+
+    wallet_users_res = await db.execute(
+        select(func.count(User.chat_id)).filter(User.wallet_address.isnot(None))
+    )
+    connected_wallets = wallet_users_res.scalar() or 0
+
+    premium_users_res = await db.execute(
+        select(func.count(User.chat_id)).filter(User.is_subscribed == True)
+    )
+    premium_users = premium_users_res.scalar() or 0
+
+    ledger_agg_res = await db.execute(
+        select(
+            func.count(BuilderFeeLedger.id),
+            func.coalesce(func.sum(BuilderFeeLedger.volume_usd), 0.0),
+            func.coalesce(func.sum(BuilderFeeLedger.builder_fee_usd), 0.0)
+        )
+    )
+    routed_orders, total_volume_usd, total_builder_fees_usd = ledger_agg_res.one()
+
+    recent_fees_res = await db.execute(
+        select(BuilderFeeLedger).order_by(BuilderFeeLedger.timestamp.desc()).limit(10)
+    )
+    recent_fees = [
+        {
+            "time": f.timestamp.strftime("%H:%M:%S") if f.timestamp else "N/A",
+            "asset": f.asset,
+            "action": f.action,
+            "venue": f.execution_venue,
+            "volume_usd": round(f.volume_usd or 0.0, 2),
+            "builder_fee_usd": round(f.builder_fee_usd or 0.0, 4),
+            "builder_code": f.builder_code,
+            "reference_id": f.reference_id
+        }
+        for f in recent_fees_res.scalars().all()
+    ]
+
+    return {
+        "wave": "Wave 3 - Builder Race",
+        "builder_code": SODEX_BUILDER_CODE,
+        "builder_fee_bps": SODEX_BUILDER_FEE_BPS,
+        "active_users": total_users,
+        "connected_wallets": connected_wallets,
+        "premium_subscribers": premium_users,
+        "routed_trades": routed_orders or 0,
+        "total_volume_usd": round(float(total_volume_usd or 0.0), 2),
+        "total_builder_fee_revenue_usd": round(float(total_builder_fees_usd or 0.0), 4),
+        "recent_fee_events": recent_fees
+    }
+
 
 @app.get("/api/metrics")
 async def get_performance_metrics(db: AsyncSession = Depends(get_db)):
@@ -117,32 +251,35 @@ async def get_performance_metrics(db: AsyncSession = Depends(get_db)):
         .filter(ValueChainAnalytics.pnl_percentage.isnot(None))
         .order_by(ValueChainAnalytics.timestamp.asc())
     )
-    
+
     raw_pnls = result.scalars().all()
     pnls = [float(pnl) for pnl in raw_pnls if pnl is not None]
-    
+
     equity = 1000.0
     equity_curve = [equity]
-    
+
     for pnl in pnls:
-        trade_return = equity * 0.10 * (pnl / 100.0) 
+        trade_return = equity * 0.10 * (pnl / 100.0)
         equity += trade_return
         equity_curve.append(equity)
-        
+
     current_equity = equity_curve[-1] if len(equity_curve) > 1 else 1000.0
-    
+    builder_race = await get_builder_race_telemetry(db)
+
     return {
         "kpis": {
             "win_rate": calculate_win_rate(pnls),
             "roi": calculate_roi(1000.0, current_equity),
             "max_drawdown": calculate_max_drawdown(equity_curve),
-            "profit_factor": calculate_profit_factor(pnls), 
-            "sharpe_ratio": calculate_sharpe_ratio(pnls),   
+            "profit_factor": calculate_profit_factor(pnls),
+            "sharpe_ratio": calculate_sharpe_ratio(pnls),
             "total_trades": len(pnls)
         },
+        "builder_race": builder_race,
         "equity_curve": equity_curve,
-        "trade_pnls": pnls 
+        "trade_pnls": pnls
     }
+
 
 async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
     result = await db.execute(
@@ -151,23 +288,24 @@ async def get_historical_performance(db: AsyncSession, asset: str) -> dict:
         .filter(ValueChainAnalytics.signal_accuracy != None)
     )
     records = result.scalars().all()
-    
+
     if not records:
         return {"winRate": "N/A", "avgPnl": "0.0%", "maxDrawdown": "0.0%"}
-    
+
     total = len(records)
     wins = len([r for r in records if r.signal_accuracy is True])
     total_pnl = sum([r.pnl_percentage or 0 for r in records])
-    
+
     return {
         "winRate": f"{int((wins / total) * 100)}%",
         "avgPnl": f"{'+' if (total_pnl / total) >= 0 else ''}{(total_pnl / total):.2f}%",
         "maxDrawdown": f"{min([r.pnl_percentage or 0 for r in records]):.2f}%"
     }
 
+
 async def backfill_signal_performance(db: AsyncSession):
     one_hour_ago = datetime.utcnow() - timedelta(hours=1)
-    
+
     result = await db.execute(
         select(ValueChainAnalytics)
         .filter(ValueChainAnalytics.signal_accuracy == None)
@@ -176,7 +314,7 @@ async def backfill_signal_performance(db: AsyncSession):
         .filter(ValueChainAnalytics.timestamp <= one_hour_ago)
     )
     pending_signals = result.scalars().all()
-    
+
     for record in pending_signals:
         try:
             market_data = await fetch_market_snapshot(record.asset)
@@ -184,67 +322,76 @@ async def backfill_signal_performance(db: AsyncSession):
             if current_price > 0:
                 price_change = current_price - record.entry_price
                 pnl_pct = (price_change / record.entry_price) * 100
-                
+
                 if record.sentiment == "BUY":
                     record.pnl_percentage = pnl_pct
                     record.signal_accuracy = pnl_pct > 0
-                else: 
+                else:
                     record.pnl_percentage = -pnl_pct
                     record.signal_accuracy = pnl_pct < 0
-                    
+
                 record.forward_price_change = price_change
         except Exception:
             pass
-            
+
     if pending_signals:
         await db.commit()
+
 
 async def perform_analysis(db: AsyncSession):
     await backfill_signal_performance(db)
 
     news_items = await fetch_news_from_api()
     new_news = await deduplicate_and_categorize(news_items)
-    if not new_news: 
+    if not new_news:
         return {"status": "no_new_data"}
 
     await log_to_db(f"Ingested {len(new_news)} new macro updates. Routing to LLM...", "INFO")
 
     analyses = analyze_with_llm(build_prompt(new_news))
     signals = generate_signals(analyses)
-    
+
     if signals:
         await log_to_db(f"LLM Processing complete. {len(signals)} agentic signals generated.", "INFO")
         result = await db.execute(select(User).filter(User.is_active == True))
         active_users = result.scalars().all()
-        
-        premium_users = [{"chat_id": u.chat_id, "vol_guard": u.volatility_guard_threshold, "wallet": getattr(u, 'wallet_address', None)} for u in active_users if u.is_subscribed]
-        free_users = [{"chat_id": u.chat_id, "vol_guard": u.volatility_guard_threshold, "wallet": getattr(u, 'wallet_address', None)} for u in active_users if not u.is_subscribed]
+
+        premium_users = [
+            {"chat_id": u.chat_id, "vol_guard": u.volatility_guard_threshold, "wallet": getattr(u, 'wallet_address', None)}
+            for u in active_users if u.is_subscribed
+        ]
+        free_users = [
+            {"chat_id": u.chat_id, "vol_guard": u.volatility_guard_threshold, "wallet": getattr(u, 'wallet_address', None)}
+            for u in active_users if not u.is_subscribed
+        ]
 
         for index, signal in enumerate(signals):
             try:
                 market_data = await fetch_market_snapshot(signal["asset"])
                 entry_price = float(market_data.get("price", 0.0))
                 volatility = abs(float(market_data.get("change_pct_24h", 0.0)))
-                
+
                 db.add(ValueChainAnalytics(
                     asset=signal["asset"],
                     sentiment=signal["action"],
                     confidence=signal["confidence"],
                     rationale=signal["rationale"],
                     source_article=signal["source_headline"],
-                    entry_price=entry_price
+                    entry_price=entry_price,
+                    builder_code=SODEX_BUILDER_CODE
                 ))
-                
+
                 signal["volatility"] = volatility
 
                 target_users = premium_users.copy()
-                if index == 0: target_users.extend(free_users)
+                if index == 0:
+                    target_users.extend(free_users)
 
                 for user in target_users:
                     if volatility <= user["vol_guard"]:
                         if signal.get("signal_type") == "SECTOR":
                             if not user.get("wallet"):
-                                continue 
+                                continue
                             try:
                                 async with httpx.AsyncClient(timeout=10.0) as client:
                                     resp = await client.get(f"{VAULT_MANAGER_URL}/api/vault-balance/{user['wallet']}")
@@ -254,18 +401,22 @@ async def perform_analysis(db: AsyncSession):
                                 print(f"Vault balance check failed: {e}")
                         else:
                             await send_telegram_alert(user["chat_id"], signal, is_sector=False)
-                            
+
             except Exception as e:
                 print(f"Skipping signal for {signal['asset']} due to error: {e}")
 
         if len(signals) > 1:
             with_count = len(signals) - 1
-            upsell_msg = f"🔒 **{with_count} more high-confidence signals** were just generated!\n\nUse `/subscribe` to unlock the full ValueChain stream."
+            upsell_msg = (
+                f"🔒 **{with_count} more high-confidence signals** were just generated!\n\n"
+                f"Use `/subscribe` to unlock the full ValueChain stream or `/builder` to view your SoDEX rewards."
+            )
             for user in free_users:
                 await send_direct_message(user["chat_id"], upsell_msg)
-    
+
     await db.commit()
     return {"status": "success", "agentic_actions_routed": len(signals)}
+
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
@@ -275,8 +426,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         return {"status": "error"}
 
     help_message = (
-        "📚 **SentiTrade-AI Command Directory**\n\n"
-        "🔹 `/start` - Activate the agent and view the onboarding guide.\n"
+        "📚 **SentiTrade-AI Command Directory (Wave 3 Builder Race)**\n\n"
+        "🔹 `/start` - Activate the agent and bind SoDEX Builder Code.\n"
+        "🔹 `/builder` - View live SoDEX Builder Fee revenue, volume & your referral link.\n"
         "🔹 `/dashboard` - View live agent performance and equity curve.\n"
         "🔹 `/vault` - View the Vault's current allocations and TVL.\n"
         "🔹 `/deposit` - Deposit USDC into the autonomous AI Vault.\n"
@@ -284,7 +436,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         "🔹 `/portfolio <address>` - Check your vSENTI balance and its current value.\n"
         "🔹 `/volatility <percentage>` - Set your risk guard (e.g., `/volatility 15`).\n"
         "🔹 `/subscribe` - Unlock the premium ValueChain stream.\n"
-        "🔹 `/stop` - Take the agent offline.\n\n"
+        "🔹 `/stop` - Take the agent offline.\n"
     )
 
     if "callback_query" in update:
@@ -297,26 +449,29 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         if data.startswith("reject_"):
             await delete_telegram_message(chat_id, message_id)
             await answer_callback_query(callback_id, "Signal discarded.")
-            
+
         elif data.startswith("approve_vault_"):
             parts = data.split("_")
             asset = parts[2]
             formatted_asset = asset if asset.startswith("$") else f"${asset}"
             action = parts[3] if len(parts) > 3 else "BUY"
             confidence = int(parts[4]) if len(parts) > 4 else 85
-            
+
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
             caller_address = getattr(user, 'wallet_address', None)
-            
+
             if not caller_address:
-                await send_direct_message(chat_id, "❌ **Access Denied:** Please connect your wallet via the `/deposit` or web portal first so we can verify your vSENTI holding.")
+                await send_direct_message(
+                    chat_id,
+                    "❌ **Access Denied:** Please connect your wallet via `/deposit` or the web portal first so we can verify your vSENTI holding."
+                )
                 return {"status": "ok"}
-                
+
             await answer_callback_query(callback_id, "Voting to execute vault rebalance...")
             await send_direct_message(
-                chat_id, 
-                f"⏳ **Authorizing Vault Rebalance...**\nRouting tokenized capital to {formatted_asset}. Awaiting verification on Base."
+                chat_id,
+                f"⏳ **Authorizing Vault Rebalance...**\nRouting tokenized capital to {formatted_asset} under Builder Code `{SODEX_BUILDER_CODE}`."
             )
 
             try:
@@ -327,18 +482,31 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                             "asset": formatted_asset,
                             "action": action,
                             "confidence": confidence,
-                            "callerAddress": caller_address
+                            "callerAddress": caller_address,
+                            "builderCode": SODEX_BUILDER_CODE
                         }
                     )
                 resp_data = resp.json()
-                
+
                 if resp.status_code == 200 and resp_data.get("success"):
                     tx_hash = resp_data.get("tx_hash")
+                    deployed_usd = float(resp_data.get("deployed_usdc", 250.0))
+                    fee_earned = await record_builder_fee_event(
+                        db=db,
+                        chat_id=chat_id,
+                        wallet_address=caller_address,
+                        asset=formatted_asset,
+                        action=action,
+                        volume_usd=deployed_usd,
+                        execution_venue="SentiTradeVault",
+                        reference_id=tx_hash
+                    )
                     explorer_link = f"https://sepolia.basescan.org/tx/{tx_hash}"
                     success_text = (
                         f"✅ **Vault Successfully Rebalanced!**\n\n"
                         f"🪙 **Index Target:** {formatted_asset}\n"
                         f"⚡ **Strategy Action:** {action}\n"
+                        f"🏷️ **Builder Code:** `{SODEX_BUILDER_CODE}` (+${fee_earned:.4f} Builder Fee)\n"
                         f"🔗 [View on Basescan]({explorer_link})"
                     )
                     await send_direct_message(chat_id, success_text)
@@ -354,10 +522,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             formatted_asset = asset if asset.startswith("$") else f"${asset}"
             action = parts[3] if len(parts) > 3 else "BUY"
             confidence = int(parts[4]) if len(parts) > 4 else 85
-            
+
             await answer_callback_query(callback_id, "Fetching AI Logic...")
             stats = await get_historical_performance(db, formatted_asset)
-            
+
             result = await db.execute(
                 select(ValueChainAnalytics.rationale)
                 .filter(ValueChainAnalytics.asset == formatted_asset)
@@ -371,46 +539,68 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "asset": formatted_asset,
                 "action": action,
                 "confidence": str(confidence),
+                "builderCode": SODEX_BUILDER_CODE,
+                "builderFeeBps": str(SODEX_BUILDER_FEE_BPS),
                 "winRate": stats["winRate"],
                 "avgPnl": stats["avgPnl"],
                 "maxDrawdown": stats["maxDrawdown"],
                 "rationale": latest_rationale
             })
-            
+
             web_app_url = f"{MINI_APP_URL}?{query_params}"
-            keyboard = {"keyboard": [[{"text": "🔗 Review & Connect Wallet", "web_app": {"url": web_app_url}}]], "resize_keyboard": True, "one_time_keyboard": True}
+            keyboard = {
+                "keyboard": [[{"text": "🔗 Review & Connect Wallet", "web_app": {"url": web_app_url}}]],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
+            }
             await send_direct_message(
-                chat_id, 
-                f"⚡ **Agentic Execution: {formatted_asset}**\n\nReview the AI Logic and historical performance metrics in the Web Console before executing.", 
+                chat_id,
+                f"⚡ **Agentic Execution: {formatted_asset}**\n🏷️ **SoDEX Builder Code:** `{SODEX_BUILDER_CODE}`\n\nReview the AI Logic and historical performance metrics in the Web Console before executing.",
                 reply_markup=keyboard
             )
-            
+
         elif data == "cmd_subscribe":
             await answer_callback_query(callback_id)
             query_params = urllib.parse.urlencode({
                 "intent": "subscribe",
                 "target": "dev",
-                "chain": "base", 
-                "chainId": "8453", # Mainnet
-                "amount": "0.005"
+                "chain": "base",
+                "chainId": "8453",
+                "amount": "0.005",
+                "builderCode": SODEX_BUILDER_CODE
             })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "💎 Pay 0.005 ETH / Month", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
-                chat_id, 
-                "⭐️ **Unlock SentiTrade Premium**\n\nPay 0.005 ETH on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
+                chat_id,
+                "⭐️ **Unlock SentiTrade Premium**\n\nPay 0.005 ETH on the Base network to unlock all high-confidence agentic trade signals for 30 days.",
                 reply_markup=keyboard
             )
-            
+
+        elif data == "cmd_builder":
+            await answer_callback_query(callback_id, "Loading Builder Race telemetry...")
+            telemetry = await get_builder_race_telemetry(db)
+            ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{chat_id}"
+            msg = (
+                f"🏆 **SoSoValue Wave 3 Builder Race Hub**\n\n"
+                f"🏷️ **SoDEX Builder Code:** `{telemetry['builder_code']}` ({telemetry['builder_fee_bps']} bps)\n"
+                f"💰 **Builder Fee Revenue:** `${telemetry['total_builder_fee_revenue_usd']:,.4f} USD`\n"
+                f"📊 **Attributed Volume:** `${telemetry['total_volume_usd']:,.2f} USD`\n"
+                f"⚡ **Routed SoDEX Trades:** `{telemetry['routed_trades']}`\n"
+                f"👥 **Active Traders:** `{telemetry['active_users']}`\n\n"
+                f"🔗 **Your Referral Link (Grow Real Users):**\n`{ref_link}`"
+            )
+            await send_direct_message(chat_id, msg)
+
         elif data == "cmd_help":
             await answer_callback_query(callback_id, "Loading help...")
             await send_direct_message(chat_id, help_message)
-            
+
         return {"status": "ok"}
 
     if "message" in update and "web_app_data" in update["message"]:
         chat_id = update["message"]["chat"]["id"]
-        
+
         try:
             web_app_payload = json.loads(update["message"]["web_app_data"]["data"])
             status = web_app_payload.get("status")
@@ -421,42 +611,61 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user = result.scalar_one_or_none()
                 if user and status != "subscribed":
                     setattr(user, 'wallet_address', user_address)
+                    user.builder_code = SODEX_BUILDER_CODE
                     await db.commit()
 
             if status == "subscribed":
                 tx_hash = web_app_payload.get("tx_hash", "Unknown")
-                
+
                 result = await db.execute(select(User).filter(User.chat_id == chat_id))
                 user = result.scalar_one_or_none()
                 if user:
                     user.is_subscribed = True
                     user.subscription_end = datetime.utcnow() + timedelta(days=30)
                     await db.commit()
-                
+
                 explorer_link = f"https://basescan.org/tx/{tx_hash}"
                 await send_direct_message(
-                    chat_id, 
+                    chat_id,
                     f"🎉 **Premium Activated!**\n\nPayment verified on-chain. You will now receive all agentic ValueChain trade signals for the next 30 days.\n🔗 [View Receipt on Basescan]({explorer_link})"
                 )
                 return {"status": "ok"}
 
             elif status == "deposited":
-                amount = web_app_payload.get("amount", "0")
-                await send_direct_message(chat_id, f"✅ **Deposit Confirmed!**\n\nSuccessfully deposited **{amount} USDC** from `{user_address[:6]}...{user_address[-4:]}` into the SentiTrade Vault.")
+                amount = float(web_app_payload.get("amount", "0") or 0)
+                await record_builder_fee_event(
+                    db=db,
+                    chat_id=chat_id,
+                    wallet_address=user_address,
+                    asset="vSENTI_VAULT",
+                    action="DEPOSIT",
+                    volume_usd=amount,
+                    execution_venue="SentiTradeVault"
+                )
+                await send_direct_message(
+                    chat_id,
+                    f"✅ **Deposit Confirmed!**\n\nSuccessfully deposited **{amount} USDC** from `{user_address[:6]}...{user_address[-4:]}` into the SentiTrade Vault (Builder Code `{SODEX_BUILDER_CODE}`)."
+                )
                 return {"status": "ok"}
-            
+
             elif status == "redeemed":
                 amount = web_app_payload.get("amount", "0")
-                await send_direct_message(chat_id, f"✅ **Redemption Confirmed!**\n\nSuccessfully burned **{amount} vSENTI** from `{user_address[:6]}...{user_address[-4:]}` and redeemed your USDC.")
+                await send_direct_message(
+                    chat_id,
+                    f"✅ **Redemption Confirmed!**\n\nSuccessfully burned **{amount} vSENTI** from `{user_address[:6]}...{user_address[-4:]}` and redeemed your USDC."
+                )
                 return {"status": "ok"}
 
             elif status == "connected":
                 asset = web_app_payload.get("asset", "Unknown")
                 action = web_app_payload.get("action", "BUY")
                 confidence = web_app_payload.get("confidence", "80")
-                
-                await send_direct_message(chat_id, f"⏳ **Analyzing ValueChain...**\nPreparing AI-driven SoDEX order for {asset}.")
-                
+
+                await send_direct_message(
+                    chat_id,
+                    f"⏳ **Analyzing ValueChain...**\nPreparing AI-driven SoDEX order for {asset} with Builder Code `{SODEX_BUILDER_CODE}`."
+                )
+
                 try:
                     order_data = await prepare_sodex_order(asset=asset, action=action, address=user_address)
                     sodex_chain_id = 138565 if "testnet" in SODEX_SPOT_API else 286623
@@ -472,17 +681,28 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         "asset": asset,
                         "action": action,
                         "confidence": confidence,
-                        "winRate": stats["winRate"],          
-                        "avgPnl": stats["avgPnl"],            
-                        "maxDrawdown": stats["maxDrawdown"]   
+                        "builderCode": SODEX_BUILDER_CODE,
+                        "builderFeeUsd": str(order_data["builder_fee_usd"]),
+                        "winRate": stats["winRate"],
+                        "avgPnl": stats["avgPnl"],
+                        "maxDrawdown": stats["maxDrawdown"]
                     })
-                    
-                    web_app_url = f"{MINI_APP_URL}?{query_params}"
-                    keyboard = {"keyboard": [[{"text": f"🔐 Authorize Agentic Trade", "web_app": {"url": web_app_url}}]],"resize_keyboard": True,"one_time_keyboard": True}
 
-                    success_msg = f"✅ **SoSoValue Agent Ready**\nAsset: {asset}\n\n⚠️ **Action Required:**\nSign the payload to authorize execution on the ValueChain."
+                    web_app_url = f"{MINI_APP_URL}?{query_params}"
+                    keyboard = {
+                        "keyboard": [[{"text": "🔐 Authorize Agentic Trade", "web_app": {"url": web_app_url}}]],
+                        "resize_keyboard": True,
+                        "one_time_keyboard": True
+                    }
+
+                    success_msg = (
+                        f"✅ **SoSoValue Agent Ready**\n"
+                        f"🪙 **Asset:** {asset}\n"
+                        f"🏷️ **Builder Code:** `{SODEX_BUILDER_CODE}` (${order_data['builder_fee_usd']:.4f} Builder Fee)\n\n"
+                        f"⚠️ **Action Required:**\nSign the payload to authorize execution on the ValueChain."
+                    )
                     await send_direct_message(chat_id, success_msg, reply_markup=keyboard)
-                    
+
                 except Exception as e:
                     await send_direct_message(chat_id, f"❌ **ValueChain Error:** {str(e)}")
 
@@ -490,64 +710,141 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 signature = web_app_payload.get("signature", "")
                 raw_payload = web_app_payload.get("payload")
                 original_nonce = str(web_app_payload.get("nonce"))
+                asset = web_app_payload.get("asset", "$BTC")
+                action = web_app_payload.get("action", "BUY")
+                amount_usd = float(web_app_payload.get("amount_usd", 100.0))
 
-                typed_sig = signature if signature.startswith("0x01") else ("0x01" + signature[2:] if signature.startswith("0x") else "0x01" + signature)
-                
-                headers = {"Content-Type": "application/json", "Accept": "application/json", "X-API-Key": user_address, "X-API-Sign": typed_sig, "X-API-Nonce": original_nonce}
+                typed_sig = (
+                    signature if signature.startswith("0x01")
+                    else ("0x01" + signature[2:] if signature.startswith("0x") else "0x01" + signature)
+                )
+
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "X-API-Key": user_address,
+                    "X-API-Sign": typed_sig,
+                    "X-API-Nonce": original_nonce,
+                    "X-SoDEX-Builder-Code": SODEX_BUILDER_CODE
+                }
                 parsed_payload = json.loads(raw_payload)
                 request_body = json.dumps(parsed_payload["params"], separators=(',', ':'))
 
                 async with httpx.AsyncClient() as client:
-                    resp = await client.post(f"{SODEX_SPOT_API}/trade/orders/batch", content=request_body, headers=headers)
+                    resp = await client.post(
+                        f"{SODEX_SPOT_API}/trade/orders/batch",
+                        content=request_body,
+                        headers=headers
+                    )
                     resp_data = resp.json()
-                    
+
                     if resp.status_code == 200 and resp_data.get("data", [{}])[0].get("code") == 0:
-                        order_id = resp_data["data"][0].get("orderID", "Unknown")
-                        await send_direct_message(chat_id, f"🎉 **Intelligent Trade Executed!**\nSoDEX Order ID: `{order_id}`\n\n*Welcome to the future of finance.*", reply_markup={"remove_keyboard": True})
+                        order_id = str(resp_data["data"][0].get("orderID", "Unknown"))
+                        fee_earned = await record_builder_fee_event(
+                            db=db,
+                            chat_id=chat_id,
+                            wallet_address=user_address,
+                            asset=asset,
+                            action=action,
+                            volume_usd=amount_usd,
+                            execution_venue="SoDEX",
+                            reference_id=order_id
+                        )
+                        await send_direct_message(
+                            chat_id,
+                            (
+                                f"🎉 **Intelligent Trade Executed on SoDEX!**\n"
+                                f"🧾 **Order ID:** `{order_id}`\n"
+                                f"🏷️ **Builder Code:** `{SODEX_BUILDER_CODE}` (+${fee_earned:.4f} Builder Fee)\n\n"
+                                f"*Building sustainable on-chain finance on ValueChain.*"
+                            ),
+                            reply_markup={"remove_keyboard": True}
+                        )
                     else:
                         error_detail = resp_data.get("data", [{}])[0].get("error", resp.text)
-                        await send_direct_message(chat_id, f"❌ **SoDEX Execution Failed:**\n`{error_detail}`", reply_markup={"remove_keyboard": True})
-                        
+                        await send_direct_message(
+                            chat_id,
+                            f"❌ **SoDEX Execution Failed:**\n`{error_detail}`",
+                            reply_markup={"remove_keyboard": True}
+                        )
+
         except json.JSONDecodeError:
             await send_direct_message(chat_id, "⚠️ Received malformed data from the agent interface.")
-            
+
         return {"status": "ok"}
 
     if "message" in update and "text" in update["message"]:
         chat_id = update["message"]["chat"]["id"]
         text = update["message"]["text"].strip()
 
-        if text == "/start":
+        if text.startswith("/start"):
+            parts = text.split(" ")
+            referred_by_id = None
+            if len(parts) > 1 and parts[1].startswith("ref_"):
+                try:
+                    ref_candidate = int(parts[1].replace("ref_", ""))
+                    if ref_candidate != chat_id:
+                        referred_by_id = ref_candidate
+                except ValueError:
+                    pass
+
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
             if not user:
-                db.add(User(chat_id=chat_id, is_active=True))
+                db.add(User(
+                    chat_id=chat_id,
+                    is_active=True,
+                    builder_code=SODEX_BUILDER_CODE,
+                    referred_by=referred_by_id
+                ))
                 await db.commit()
-                
-            welcome_message = (
-                "👋 **Welcome to SentiTrade-AI!**\n\n"
-                "I read thousands of crypto news articles and SoSoValue market data so you don't have to.\n\n"
-                "When I spot a strong narrative, I score the sentiment and send you clear, actionable trade setups with **explanations you can actually understand**.\n\n"
-                "**How it works:**\n"
-                "🔍 **Discover:** I scan the ValueChain 24/7.\n"
-                "🧠 **Analyze:** I grade sentiment and explain *why*.\n"
-                "⚡ **Execute:** You review the logic and execute gasless trades via SoDEX.\n\n"
-                "👇 **Tap below to unlock your premium AI feed!**"
-            )
-            
-            keyboard = {"inline_keyboard": [[{"text": "🔓 Subscribe to AI Signals", "callback_data": "cmd_subscribe"}],[{"text": "⚙️ Help & Settings", "callback_data": "cmd_help"}]]}
-            await send_direct_message(chat_id, welcome_message, reply_markup=keyboard)
-            if user:
+                await log_to_db(f"New user onboarded (chat_id={chat_id}, builder_code={SODEX_BUILDER_CODE})", "INFO")
+            else:
                 user.is_active = True
+                user.builder_code = SODEX_BUILDER_CODE
                 await db.commit()
-        
+
+            welcome_message = (
+                f"👋 **Welcome to SentiTrade-AI (Wave 3 Builder Race)!**\n\n"
+                f"I read thousands of crypto news articles and SoSoValue market data so you don't have to.\n\n"
+                f"When I spot a strong narrative, I score the sentiment and send you clear, actionable trade setups with **explanations you can actually understand**.\n\n"
+                f"**How it works:**\n"
+                f"🔍 **Discover:** I scan the ValueChain 24/7.\n"
+                f"🧠 **Analyze:** I grade sentiment and explain *why*.\n"
+                f"⚡ **Execute:** You review the logic and execute gasless trades via **SoDEX** (Builder Code: `{SODEX_BUILDER_CODE}`).\n\n"
+                f"👇 **Tap below to unlock your premium AI feed or check Builder Race stats!**"
+            )
+
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🔓 Subscribe to AI Signals", "callback_data": "cmd_subscribe"}],
+                    [{"text": "🏆 SoDEX Builder Race Stats", "callback_data": "cmd_builder"}],
+                    [{"text": "⚙️ Help & Settings", "callback_data": "cmd_help"}]
+                ]
+            }
+            await send_direct_message(chat_id, welcome_message, reply_markup=keyboard)
+
+        elif text in ["/builder", "/revenue", "/referral"]:
+            telemetry = await get_builder_race_telemetry(db)
+            ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{chat_id}"
+            msg = (
+                f"🏆 **SoSoValue Wave 3 Builder Race Hub**\n\n"
+                f"🏷️ **SoDEX Builder Code:** `{telemetry['builder_code']}` ({telemetry['builder_fee_bps']} bps)\n"
+                f"💰 **Builder Fee Revenue:** `${telemetry['total_builder_fee_revenue_usd']:,.4f} USD`\n"
+                f"📊 **Attributed Volume:** `${telemetry['total_volume_usd']:,.2f} USD`\n"
+                f"⚡ **Routed SoDEX Trades:** `{telemetry['routed_trades']}`\n"
+                f"👥 **Active Traders:** `{telemetry['active_users']}`\n\n"
+                f"🔗 **Your Referral Link (Invite Real Traders):**\n`{ref_link}`"
+            )
+            await send_direct_message(chat_id, msg)
+
         elif text == "/help":
             await send_direct_message(chat_id, help_message)
-            
+
         elif text == "/dashboard":
-            web_app_url = f"{MINI_APP_URL}?intent=dashboard"
+            web_app_url = f"{MINI_APP_URL}?intent=dashboard&builderCode={SODEX_BUILDER_CODE}"
             frontend_url = "https://senti-trade-ai-pi.vercel.app"
-            
+
             keyboard = {
                 "inline_keyboard": [
                     [{"text": "📱 Open Mini App", "web_app": {"url": web_app_url}}],
@@ -556,8 +853,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             }
 
             await send_direct_message(
-                chat_id, 
-                "📈 **SentiTrade-AI Performance Dashboard**\n\nSelect how you would like to view real-time agent metrics, equity curve, and win rate:", 
+                chat_id,
+                "📈 **SentiTrade-AI Performance & Builder Revenue Dashboard**\n\nSelect how you would like to view real-time agent metrics, Builder Fee revenue, equity curve, and win rate:",
                 reply_markup=keyboard
             )
 
@@ -566,31 +863,43 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     resp = await client.get(f"{VAULT_MANAGER_URL}/api/vault-status")
-                    
+
                 if resp.status_code == 200:
                     data = resp.json()
                     tvl = data.get("totalAssets", 0)
-                    usdc_bal = data.get("usdcBalance", 0)
                     usdc_pct = data.get("usdcPercentage", 100)
                     allocations = data.get("allocations", [])
-                    
+                    vault_fees = data.get("totalBuilderFeeRevenue", 0.0)
+
                     alloc_text = ""
                     for alloc in allocations:
                         alloc_text += f"• **{alloc['asset']}**: {alloc['percentage']}% (${alloc['value']:,.2f})\n"
-                        
+
                     msg = (
                         f"🏦 **SentiTrade Autonomous Vault**\n\n"
-                        f"💵 **Total Value Locked (TVL):** `${tvl:,.2f}`\n\n"
+                        f"💵 **Total Value Locked (TVL):** `${tvl:,.2f}`\n"
+                        f"🏷️ **Builder Code:** `{SODEX_BUILDER_CODE}` (On-Chain Fees: `${vault_fees:,.4f}`)\n\n"
                         f"📊 **Current Allocations:**\n"
                         f"• **USDC (Idle):** {usdc_pct}%\n"
                         f"{alloc_text}\n"
                         f"Use `/deposit` to add funds or `/redeem` to withdraw."
                     )
-                    
-                    query_dep = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
-                    query_red = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
-                    
-                    keyboard = {"inline_keyboard": [[{"text": "💰 Deposit", "web_app": {"url": f"{MINI_APP_URL}?{query_dep}"}}, {"text": "📤 Redeem", "web_app": {"url": f"{MINI_APP_URL}?{query_red}"}}]]}
+
+                    query_dep = urllib.parse.urlencode({
+                        "intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS,
+                        "chain": "baseSepolia", "chainId": "84532", "builderCode": SODEX_BUILDER_CODE
+                    })
+                    query_red = urllib.parse.urlencode({
+                        "intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS,
+                        "chain": "baseSepolia", "chainId": "84532", "builderCode": SODEX_BUILDER_CODE
+                    })
+
+                    keyboard = {
+                        "inline_keyboard": [[
+                            {"text": "💰 Deposit", "web_app": {"url": f"{MINI_APP_URL}?{query_dep}"}},
+                            {"text": "📤 Redeem", "web_app": {"url": f"{MINI_APP_URL}?{query_red}"}}
+                        ]]
+                    }
                     await send_direct_message(chat_id, msg, reply_markup=keyboard)
                 else:
                     await send_direct_message(chat_id, "❌ **Error:** Could not fetch vault status.")
@@ -598,7 +907,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 await send_direct_message(chat_id, f"🔌 **Service Disconnected:** Could not reach the Vault Execution Node.\n`{str(e)}`")
 
         elif text == "/deposit":
-            query_params = urllib.parse.urlencode({"intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
+            query_params = urllib.parse.urlencode({
+                "intent": "deposit", "target": "vault", "vault": VAULT_ADDRESS,
+                "chain": "baseSepolia", "chainId": "84532", "builderCode": SODEX_BUILDER_CODE
+            })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "💰 Open Deposit Portal", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
@@ -608,9 +920,12 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "Tap below to connect your wallet and execute the deposit securely on the Base Network.",
                 reply_markup=keyboard
             )
-            
+
         elif text == "/redeem":
-            query_params = urllib.parse.urlencode({"intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS, "chain": "baseSepolia", "chainId": "84532"})
+            query_params = urllib.parse.urlencode({
+                "intent": "redeem", "target": "vault", "vault": VAULT_ADDRESS,
+                "chain": "baseSepolia", "chainId": "84532", "builderCode": SODEX_BUILDER_CODE
+            })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "📤 Open Redemption Portal", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
@@ -620,29 +935,29 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 "Tap below to connect your wallet and execute the redemption securely on the Base Network.",
                 reply_markup=keyboard
             )
-            
+
         elif text.startswith("/portfolio"):
             parts = text.split(" ")
             if len(parts) < 2:
                 await send_direct_message(chat_id, "⚠️ **Usage:** `/portfolio <your_wallet_address>`\nExample: `/portfolio 0x123...abc`")
                 return {"status": "ok"}
-            
+
             wallet_address = parts[1]
             if not wallet_address.startswith("0x") or len(wallet_address) != 42:
                 await send_direct_message(chat_id, "❌ Invalid Ethereum wallet address format.")
                 return {"status": "ok"}
-            
+
             await send_direct_message(chat_id, "🔍 **Scanning the blockchain for your vault assets...**")
-            
+
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     resp = await client.get(f"{VAULT_MANAGER_URL}/api/vault-balance/{wallet_address}")
-                    
+
                 if resp.status_code == 200:
                     data = resp.json()
                     shares = float(data.get("shares", 0))
                     assets = float(data.get("assets", 0))
-                    
+
                     if shares == 0:
                         msg = (
                             f"💼 **Vault Portfolio: {wallet_address[:6]}...{wallet_address[-4:]}**\n\n"
@@ -670,23 +985,24 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.is_active = False
                 await db.commit()
                 await send_direct_message(chat_id, "Agent offline. You have opted out of the ValueChain stream.")
-        
+
         elif text == "/subscribe":
             query_params = urllib.parse.urlencode({
                 "intent": "subscribe",
                 "target": "dev",
-                "chain": "base", 
-                "chainId": "8453", # Mainnet
-                "amount": "0.005"
+                "chain": "base",
+                "chainId": "8453",
+                "amount": "0.005",
+                "builderCode": SODEX_BUILDER_CODE
             })
             web_app_url = f"{MINI_APP_URL}?{query_params}"
             keyboard = {"inline_keyboard": [[{"text": "💎 Pay 0.005 ETH / Month", "web_app": {"url": web_app_url}}]]}
             await send_direct_message(
-                chat_id, 
-                "⭐️ **Unlock SentiTrade Premium**\n\nPay 0.005 ETH on the Base network to unlock all high-confidence agentic trade signals for 30 days.", 
+                chat_id,
+                "⭐️ **Unlock SentiTrade Premium**\n\nPay 0.005 ETH on the Base network to unlock all high-confidence agentic trade signals for 30 days.",
                 reply_markup=keyboard
             )
-        
+
         elif text.startswith("/volatility"):
             result = await db.execute(select(User).filter(User.chat_id == chat_id))
             user = result.scalar_one_or_none()
@@ -696,17 +1012,18 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     user.volatility_guard_threshold = new_threshold
                     await db.commit()
                     await send_direct_message(
-                        chat_id, 
+                        chat_id,
                         f"🛡️ **Volatility Guard Updated**\nYour threshold is now set to **{new_threshold}%**.\n\nSignals for assets experiencing volatility above this limit will be automatically filtered out."
                     )
                 except (IndexError, ValueError):
                     await send_direct_message(chat_id, "⚠️ **Usage:** `/volatility <percentage>` (e.g., `/volatility 15`)")
-        
+
         else:
             reply_text = generate_chat_reply(text)
             await send_direct_message(chat_id, reply_text)
 
     return {"status": "ok"}
+
 
 @app.post("/run-analysis")
 async def run_analysis_endpoint(db: AsyncSession = Depends(get_db)):
@@ -715,41 +1032,44 @@ async def run_analysis_endpoint(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd: float = 100.0) -> dict:
     clean_asset = asset.replace('$', '').upper()
     target_symbol_name = f"v{clean_asset}_vUSDC"
-    
+
     async with httpx.AsyncClient(timeout=15.0) as client:
         state_resp = await client.get(f"{SODEX_SPOT_API}/accounts/{address}/state")
         state_resp.raise_for_status()
         state_data = state_resp.json()
-        
+
         if state_data.get("code") != 0 or not state_data.get("data"):
             raise ValueError(f"Wallet address {address[:6]} not recognized. Have you initialized your SoDEX account?")
-        
+
         sodex_account_id = int(state_data["data"]["aid"])
-        
+
         if sodex_account_id == 0:
-            raise ValueError(f"Wallet `{address[:6]}...` is not initialized on SoDEX. Please connect to the SoDEX dApp and deposit funds to activate your trading account first.")
+            raise ValueError(
+                f"Wallet `{address[:6]}...` is not initialized on SoDEX. Please connect to the SoDEX dApp and deposit funds to activate your trading account first."
+            )
 
         symbols_resp = await client.get(
             f"{SODEX_SPOT_API}/markets/symbols",
             params={"symbol": target_symbol_name}
         )
-        
+
         symbols_data = symbols_resp.json()
-        
+
         if symbols_data.get("code") != 0:
             error_text = str(symbols_data.get("error", "")).lower()
             if "symbol not found" in error_text:
                 raise ValueError(f"Trade aborted: '{clean_asset}' is not currently listed on SoDEX.")
             else:
                 raise ValueError(f"SoDEX API Error: {error_text}")
-            
+
         symbol_id = None
         data_payload = symbols_data.get("data")
-        
+
         if isinstance(data_payload, dict) and data_payload.get("id"):
             symbol_id = data_payload.get("id")
         elif isinstance(data_payload, list) and len(data_payload) > 0:
@@ -761,16 +1081,20 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         if not symbol_id:
             raise ValueError(f"Failed to locate the ID for '{clean_asset}' on SoDEX.")
 
+    # Tag clOrdID and order payload with the project's SoDEX Builder Code for Wave 3 attribution
+    builder_prefix = SODEX_BUILDER_CODE[:8].upper()
     order_item = {
-        "symbolID": symbol_id,            
-        "clOrdID": str(uuid.uuid4())[:36], 
+        "symbolID": symbol_id,
+        "clOrdID": f"{builder_prefix}-{uuid.uuid4().hex[:24]}",
         "side": 1 if action == "BUY" else 2,
-        "type": 2,        
-        "timeInForce": 3, 
+        "type": 2,
+        "timeInForce": 3,
+        "builderCode": SODEX_BUILDER_CODE,
+        "builderFeeBps": SODEX_BUILDER_FEE_BPS,
     }
-    
+
     if action == "BUY":
-        order_item["funds"] = f"{float(amount_usd):.2f}".rstrip('0').rstrip('.') 
+        order_item["funds"] = f"{float(amount_usd):.2f}".rstrip('0').rstrip('.')
     else:
         order_item["quantity"] = "1"
 
@@ -778,19 +1102,24 @@ async def prepare_sodex_order(asset: str, action: str, address: str, amount_usd:
         "type": "batchNewOrder",
         "params": {
             "accountID": sodex_account_id,
+            "builderCode": SODEX_BUILDER_CODE,
             "orders": [order_item]
         }
     }
-    
+
     compact_json = json.dumps(payload, separators=(',', ':'))
     payload_hash = "0x" + keccak(text=compact_json).hex()
-    nonce = int(time.time() * 1000) 
-    
+    nonce = int(time.time() * 1000)
+
     return {
         "compact_json": compact_json,
         "payload_hash": payload_hash,
-        "nonce": nonce
+        "nonce": nonce,
+        "builder_code": SODEX_BUILDER_CODE,
+        "builder_fee_usd": calculate_builder_fee(amount_usd),
+        "amount_usd": amount_usd
     }
+
 
 async def send_direct_message(chat_id: int, text: str, reply_markup: dict = None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -800,10 +1129,12 @@ async def send_direct_message(chat_id: int, text: str, reply_markup: dict = None
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload)
 
+
 async def delete_telegram_message(chat_id: int, message_id: int):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage"
     async with httpx.AsyncClient() as client:
         await client.post(url, json={"chat_id": chat_id, "message_id": message_id})
+
 
 async def edit_telegram_message(chat_id: int, message_id: int, text: str, reply_markup: dict = None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
@@ -812,6 +1143,7 @@ async def edit_telegram_message(chat_id: int, message_id: int, text: str, reply_
         payload["reply_markup"] = json.dumps(reply_markup)
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload)
+
 
 async def answer_callback_query(callback_query_id: str, text: str = ""):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
